@@ -32,6 +32,7 @@ public final class MainActivity extends Activity {
     private PixelPreview preview;
     private ProgressBar progress;
     private Button refresh,stop;
+    private Button rotateImage,cropImage,restoreImage;
     private Spinner duration,fit,power,poll,blocks,panelType;
     private CheckBox dither,binary;
     private SeekBar threshold;
@@ -39,6 +40,8 @@ public final class MainActivity extends Activity {
     private CropWindow appliedCrop;
     private int cropRotation;
     private boolean cropped,editingCrop;
+    private boolean calibrationChart;
+    private CalibrationUi calibration;
     private PanelImage.Prepared prepared;
     private int rotation,revision;
     private String imageName="内置四色测试图";
@@ -92,7 +95,7 @@ public final class MainActivity extends Activity {
         android.widget.FrameLayout host=new android.widget.FrameLayout(this);root.addView(host,new LinearLayout.LayoutParams(-1,0,1));
         for(int i=0;i<3;i++){pageScrolls[i]=new ScrollView(this);pageScrolls[i].setFillViewport(true);pageBodies[i]=new LinearLayout(this);pageBodies[i].setOrientation(LinearLayout.VERTICAL);pageBodies[i].setPadding(0,dp(14),0,dp(24));pageScrolls[i].addView(pageBodies[i]);host.addView(pageScrolls[i],new android.widget.FrameLayout.LayoutParams(-1,-1));}
         LinearLayout nav=new LinearLayout(this);nav.setPadding(0,dp(4),0,dp(8));root.addView(nav);
-        String[] names={"设备与测试","图像与发送","高级参数"};for(int i=0;i<3;i++){final int index=i;tabs[i]=button(names[i]);tabs[i].setTextSize(13);tabs[i].setOnClickListener(v->selectPage(index));nav.addView(tabs[i],weighted());}
+        String[] names={"设备与检测","图像与发送","高级参数"};for(int i=0;i<3;i++){final int index=i;tabs[i]=button(names[i]);tabs[i].setTextSize(13);tabs[i].setOnClickListener(v->selectPage(index));nav.addView(tabs[i],weighted());}
         Shizuku.addRequestPermissionResultListener(permissionResult);
         LinearLayout page=pageBodies[0];section(page,"设备与 NFC");
         page.addView(text(android.os.Build.MANUFACTURER+" · "+android.os.Build.MODEL+" / "+android.os.Build.DEVICE,14,0xff52635d));
@@ -111,6 +114,9 @@ public final class MainActivity extends Activity {
         duration=spinner(new String[]{"寻卡 5 秒","寻卡 10 秒","寻卡 30 秒","寻卡 60 秒"});duration.setSelection(1);page.addView(duration);
         page.addView(action("测试 Q-Poll 能力",v->start("qtag")));page.addView(action("普通 NFC-A 对照",v->start("standard")));
         page.addView(text("未读到标签不等于不支持 Q-Poll；成功寻卡也不代表墨水屏供电与刷新已验证。",12,0xff68766e));
+        section(page,"屏幕检测");
+        page.addView(action("只读检查屏幕",v->start("identity")));
+        page.addView(text("读取并核对屏幕规格与原厂配置，不发送图像或启动刷新；无法自动识别 A0 / A1。",12,0xff68766e));
         page=pageBodies[1];section(page,"图像与发送");
         page.addView(text("屏幕类型",14,0xff52635d));
         panelType=spinner(new String[]{"请选择屏幕类型","A0 · 华为 552×768 四色","A1 · 华为 552×768 四色"});
@@ -126,14 +132,14 @@ public final class MainActivity extends Activity {
         section(page,"编辑图片");
         LinearLayout choose=new LinearLayout(this);
         choose.addView(action("选择图片",v->{Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("image/*");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,41);}),weighted());
-        choose.addView(action("四色测试图",v->{source=PanelImage.testPattern();originalSource=source;cropped=false;rotation=0;imageName="内置四色测试图";prepare();}),weighted());page.addView(choose);
-        page.addView(action("色阶测试图",v->{source=PanelImage.tonePattern();originalSource=source;cropped=false;rotation=0;imageName="内置色阶测试图";prepare();}));
+        choose.addView(action("四色测试图",v->{calibrationChart=false;source=PanelImage.testPattern();originalSource=source;cropped=false;rotation=0;imageName="内置四色测试图";prepare();}),weighted());page.addView(choose);
+        page.addView(action("色阶测试图",v->{calibrationChart=false;source=PanelImage.tonePattern();originalSource=source;cropped=false;rotation=0;imageName="内置色阶测试图";prepare();}));
         LinearLayout options=new LinearLayout(this);options.setGravity(android.view.Gravity.CENTER_VERTICAL);
         fit=spinner(new String[]{"完整显示 · 留白","填满屏幕 · 裁剪"});options.addView(fit,new LinearLayout.LayoutParams(0,dp(48),1));
-        options.addView(action("旋转 90°",v->{rotation=(rotation+90)%360;prepare();}),weighted());page.addView(options);
+        rotateImage=action("旋转 90°",v->{rotation=(rotation+90)%360;prepare();});options.addView(rotateImage,weighted());page.addView(options);
         LinearLayout cropActions=new LinearLayout(this);
-        cropActions.addView(action("裁切图片",v->showCrop()),weighted());
-        cropActions.addView(action("还原原图",v->{if(originalSource!=null){source=originalSource;rotation=0;cropped=false;prepare();}}),weighted());page.addView(cropActions);
+        cropImage=action("裁切图片",v->showCrop());cropActions.addView(cropImage,weighted());
+        restoreImage=action("还原原图",v->{if(originalSource!=null){source=originalSource;rotation=0;cropped=false;prepare();}});cropActions.addView(restoreImage,weighted());page.addView(cropActions);
         binary=new CheckBox(this);binary.setText("黑白二值化");binary.setChecked(getSharedPreferences("refresh-settings",MODE_PRIVATE).getBoolean("binary",false));idleControls.add(binary);page.addView(binary);
         int savedThreshold=getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("threshold",128);
         thresholdLabel=text("二值化阈值："+Math.max(0,Math.min(255,savedThreshold))+"（松手更新预览）",13,0xff52635d);page.addView(thresholdLabel);
@@ -152,7 +158,6 @@ public final class MainActivity extends Activity {
         blocks.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("blockSize",blockSizes[pos]).apply();if(pos>0)dither.setChecked(false);prepare();}public void onNothingSelected(AdapterView<?> p){}});
         panelType.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putString("panelType",selectedPanelType()).apply();prepare();}public void onNothingSelected(AdapterView<?> p){}});
         fit.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){prepare();}public void onNothingSelected(AdapterView<?> p){}});
-        page.addView(action("只读检查屏幕",v->start("identity")));
         page.addView(text("支持相同原厂配置的 552×768 四色屏。发送时持续贴合并保持应用在前台；切换本应用内的页面不会中断操作。",12,0xff68766e));
         page=pageBodies[2];section(page,"高级参数");
         page.addView(text("参数用于下一次发送，运行期间锁定。",12,0xff68766e));
@@ -165,11 +170,22 @@ public final class MainActivity extends Activity {
         poll.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("pollMs",pollTimes[pos]).apply();}public void onNothingSelected(AdapterView<?> p){}});
         page.addView(text("0 ms 表示收到应答后立即再次查询，实际频率取决于通信耗时。",12,0xff68766e));
         page.addView(action("恢复默认参数",v->{power.setSelection(2);poll.setSelection(pollTimes.length-1);}));
+        section(page,"屏幕校色");
+        calibration=new CalibrationUi(this,new CalibrationUi.Host(){
+            public void calibrationChanged(){if(!destroyed)prepare();}
+            public void calibrationModal(boolean open){editingCrop=open;if(!destroyed)controls();}
+            public void calibrationLoading(boolean loading){preparing=loading;if(!destroyed)controls();}
+            public void showCalibrationChart(){
+                source=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);int[] pixels=new int[552*768];byte[] codes=CalibrationPalette.chart(552,768);for(int i=0;i<pixels.length;i++)pixels[i]=ImageRaster.color(codes[i]);source.setPixels(pixels,0,552,0,0,552,768);
+                originalSource=source;cropped=false;rotation=0;calibrationChart=true;imageName="校色测试图（左上黑、右上白、左下黄、右下红）";selectPage(1);prepare();
+            }
+        });
+        calibration.addTo(page);
         Button about=button("参考项目与许可证");about.setOnClickListener(v->showLicense());page.addView(about);
-        page.addView(text("墨水屏刷新测试 · v2.11.1",12,0xff68766e));
+        page.addView(text("墨水屏刷新测试 · v2.12.0",12,0xff68766e));
         log=text("",11,0xff233c31);log.setTypeface(Typeface.MONOSPACE);log.setTextIsSelectable(true);log.setPadding(dp(10),dp(8),dp(10),dp(8));
         selectPage(getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("page",0));
-        append("v2.11.1 就绪；统一使用 Shizuku Shell / Root 后端。");source=PanelImage.testPattern();originalSource=source;prepare();
+        append("v2.12.0 就绪；统一使用 Shizuku Shell / Root 后端。");source=PanelImage.testPattern();originalSource=source;calibration.restore(saved);prepare();
     }
     private void section(LinearLayout page,String title){TextView t=text(title,18,0xff142f2a);t.setTypeface(null,Typeface.BOLD);t.setPadding(0,dp(12),0,dp(6));page.addView(t);}
     private void selectPage(int index){activePage=Math.max(0,Math.min(2,index));for(int i=0;i<3;i++){pageScrolls[i].setVisibility(i==activePage?View.VISIBLE:View.GONE);tabs[i].setTextColor(i==activePage?Color.WHITE:0xff52635d);tabs[i].setBackgroundTintList(android.content.res.ColorStateList.valueOf(i==activePage?0xff176b61:0xffe3eae6));}getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("page",activePage).apply();}
@@ -182,27 +198,35 @@ public final class MainActivity extends Activity {
     private Spinner spinner(String[] values){Spinner s=new Spinner(this);s.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,values));idleControls.add(s);return s;}
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
     private String selectedPanelType(){int pos=panelType.getSelectedItemPosition();return pos==1?"A0":pos==2?"A1":"";}
-    private void controls(){boolean enabled=!busy&&!preparing&&!editingCrop;for(View v:idleControls)v.setEnabled(enabled);dither.setEnabled(enabled&&blocks.getSelectedItemPosition()==0);threshold.setEnabled(enabled&&binary.isChecked());refresh.setEnabled(enabled&&prepared!=null&&!prepared.panelType.isEmpty());stop.setEnabled(busy);stop.setVisibility(busy?View.VISIBLE:View.GONE);}
+    private void controls(){
+        boolean enabled=!busy&&!preparing&&!editingCrop;for(View v:idleControls)v.setEnabled(enabled);
+        boolean edit=enabled&&!calibrationChart;
+        for(View v:new View[]{rotateImage,cropImage,restoreImage,fit,binary,blocks})v.setEnabled(edit);
+        dither.setEnabled(edit&&blocks.getSelectedItemPosition()==0);threshold.setEnabled(edit&&binary.isChecked());
+        refresh.setEnabled(enabled&&prepared!=null&&!prepared.panelType.isEmpty());stop.setEnabled(busy);stop.setVisibility(busy?View.VISIBLE:View.GONE);if(calibration!=null)calibration.setEditable(enabled);
+    }
     private void prepare(){
         if(source==null||busy||destroyed||editingCrop)return;
         final int token=++revision,angle=rotation,block=blockSizes[blocks.getSelectedItemPosition()],level=threshold.getProgress();final boolean cover=fit.getSelectedItemPosition()==1,noise=dither.isChecked(),mono=binary.isChecked(),hasCrop=cropped;final Bitmap input=source;final String chosenPanel=selectedPanelType();
+        final int[] palette=calibration==null?null:calibration.activePalette();final boolean chart=calibrationChart;
         prepared=null;preparing=true;controls();imageInfo.setText("正在生成四色预览…");
-        new Thread(()->{try{PanelImage.Prepared image=PanelImage.prepare(input,angle,cover,noise,block,mono,level,hasCrop,chosenPanel);
+        new Thread(()->{try{PanelImage.Prepared image=PanelImage.prepare(input,angle,cover,noise,block,mono,level,hasCrop,chosenPanel,palette,chart);
             main.post(()->{if(token!=revision||destroyed)return;prepared=image;preview.setImage(image.preview);imageInfo.setText(imageName+" · 552×768 · "+image.packed.length+" 字节\n"+image.settings);preparing=false;controls();});
         }catch(Throwable e){main.post(()->{if(token!=revision||destroyed)return;preparing=false;controls();imageInfo.setText("预览失败："+e.getMessage());});}},"image-preview").start();
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
+        if(calibration!=null&&calibration.onActivityResult(request,result,data))return;
         if(request!=41||result!=RESULT_OK||data==null||data.getData()==null)return;
         final android.net.Uri uri=data.getData();preparing=true;controls();imageInfo.setText("正在读取图片…");
-        new Thread(()->{try{Bitmap image=PanelImage.load(getContentResolver(),uri);main.post(()->{if(destroyed)return;source=image;originalSource=image;cropped=false;rotation=0;imageName="自选图片";preparing=false;prepare();});}
+        new Thread(()->{try{Bitmap image=PanelImage.load(getContentResolver(),uri);main.post(()->{if(destroyed)return;calibrationChart=false;source=image;originalSource=image;cropped=false;rotation=0;imageName="自选图片";preparing=false;prepare();});}
         catch(Throwable e){main.post(()->{if(destroyed)return;preparing=false;controls();imageInfo.setText("图片读取失败："+e.getMessage());});}},"image-load").start();
     }
     private void showPixels(){
         if(prepared==null||busy||preparing||editingCrop)return;
         final Bitmap snapshot=prepared.preview;android.app.Dialog dialog=new android.app.Dialog(this,android.R.style.Theme_Material_Light_NoActionBar);previewDialog=dialog;dialog.setOnDismissListener(d->previewDialog=null);
         LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setBackgroundColor(0xfff4f7f5);content.setPadding(dp(12),dp(12),dp(12),dp(12));
-        content.addView(text("最终发送像素 · 552 × 768",20,0xff142f2a));content.addView(text("双指缩放 · 单指拖动 · 双击切换缩放",12,0xff52635d));
+        content.addView(text("最终发送像素 · 552 × 768",20,0xff142f2a));content.addView(text("双指缩放 · 单指拖动 · 双击切换缩放；校色开启时以近似实物色显示",12,0xff52635d));
         ZoomPreview viewer=new ZoomPreview(this,snapshot);content.addView(viewer,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout actions=new LinearLayout(this);Button fitButton=button("适应屏幕"),actual=button("1:1 像素"),close=button("关闭");fitButton.setOnClickListener(v->viewer.fit());actual.setOnClickListener(v->viewer.actual());close.setOnClickListener(v->dialog.dismiss());actions.addView(fitButton,weighted());actions.addView(actual,weighted());actions.addView(close,weighted());content.addView(actions);
         dialog.setContentView(content);dialog.show();dialog.getWindow().setLayout(-1,-1);
@@ -221,7 +245,7 @@ public final class MainActivity extends Activity {
             dialog.setOnDismissListener(d->{editingCrop=false;if(!destroyed)controls();});dialog.show();
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->cropView.reset());
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{try{
-                Bitmap result=cropView.result();appliedCrop=cropView.snapshot();cropRotation=angle;source=result;rotation=0;cropped=true;
+                Bitmap result=cropView.result();appliedCrop=cropView.snapshot();cropRotation=angle;source=result;rotation=0;cropped=true;calibrationChart=false;
                 // Dismiss callbacks can arrive later. Release this guard before prepare(),
                 // even when "fill" was already selected and no spinner callback will fire.
                 editingCrop=false;
@@ -310,6 +334,7 @@ public final class MainActivity extends Activity {
         TextView t=text(body.toString(),12,0xff263e35);t.setTextIsSelectable(true);t.setPadding(dp(16),dp(10),dp(16),dp(10));ScrollView s=new ScrollView(this);s.addView(t);new AlertDialog.Builder(this).setTitle("PolyForm Noncommercial 1.0.0").setView(s).setPositiveButton("关闭",null).show();
     }
     @Override protected void onResume(){super.onResume();resumed=true;}
+    @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);if(calibration!=null)calibration.saveState(out);}
     @Override protected void onStop(){resumed=false;if(busy)requestStop("页面已离开，自动停止");super.onStop();}
-    @Override protected void onDestroy(){destroyed=true;revision++;if(previewDialog!=null)previewDialog.dismiss();if(busy)requestStop("页面关闭，自动停止");Shizuku.removeRequestPermissionResultListener(permissionResult);try{Shizuku.unbindUserService(bridgeArgs,bridgeConnection,false);}catch(Exception ignored){}main.removeCallbacks(tick);super.onDestroy();}
+    @Override protected void onDestroy(){destroyed=true;revision++;if(previewDialog!=null)previewDialog.dismiss();if(calibration!=null)calibration.destroy();if(busy)requestStop("页面关闭，自动停止");Shizuku.removeRequestPermissionResultListener(permissionResult);try{Shizuku.unbindUserService(bridgeArgs,bridgeConnection,false);}catch(Exception ignored){}main.removeCallbacks(tick);super.onDestroy();}
 }

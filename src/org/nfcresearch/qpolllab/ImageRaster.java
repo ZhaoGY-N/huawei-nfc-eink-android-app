@@ -2,7 +2,7 @@ package org.nfcresearch.qpolllab;
 
 /** Quantization and preview decoding share the panel's four code values. */
 public final class ImageRaster {
-    private static final int[] COLORS={0xff000000,0xffffffff,0xfff5cd00,0xffc80000};
+    private static final int[] COLORS=CalibrationPalette.defaults();
     public static int color(int code){if(code<0||code>3)throw new IllegalArgumentException("颜色码错误");return COLORS[code];}
     public static byte[] quantize(int[] pixels,int width,int height,boolean binary,int threshold,boolean dither,int block) {
         if(width<=0||height<=0||(long)width*height!=pixels.length||threshold<0||threshold>255)
@@ -47,11 +47,15 @@ public final class ImageRaster {
     private static float clamp(float value){return Math.max(0,Math.min(255,value));}
     private static void spread(float[] current,float[] next,int x,float error){current[x+2]+=error*7/16;next[x]+=error*3/16;next[x+1]+=error*5/16;next[x+2]+=error/16;}
     public static int[] preview(byte[] packed,int width,int height) {
+        return preview(packed,width,height,COLORS);
+    }
+    public static int[] preview(byte[] packed,int width,int height,int[] palette) {
+        CalibrationPalette.validate(palette);
         if(width<=0||height<=0||height%4!=0||(long)width*height/4!=packed.length)throw new IllegalArgumentException("预览尺寸错误");
         int[] pixels=new int[width*height];
         for(int y=0;y<height;y++)for(int x=0;x<width;x++) {
             int fromBottom=height-1-y,index=(width-1-x)*(height/4)+fromBottom/4;
-            pixels[y*width+x]=COLORS[((packed[index]&255)>>(6-2*(fromBottom%4)))&3];
+            pixels[y*width+x]=palette[((packed[index]&255)>>(6-2*(fromBottom%4)))&3];
         }
         return pixels;
     }

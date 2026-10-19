@@ -26,6 +26,9 @@ public enum PanelType {
     public int[] preview(byte[] packed) {
         return ImageRaster.preview(map(packed,true),PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
     }
+    public int[] preview(byte[] packed,int[] palette) {
+        return ImageRaster.preview(map(packed,true),PanelProtocol.WIDTH,PanelProtocol.HEIGHT,palette);
+    }
     /** Stored scan 00 uses bottom-up pixels; scan 01 uses top-down pixels in each row. */
     public static byte[] forScan(byte[] packed,boolean topDown) {
         if(packed.length!=PanelProtocol.IMAGE_BYTES)throw new IllegalArgumentException("屏幕数据长度错误");
