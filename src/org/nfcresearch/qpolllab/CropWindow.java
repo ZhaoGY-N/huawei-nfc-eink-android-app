@@ -9,6 +9,10 @@ public final class CropWindow {
         imageWidth=width;imageHeight=height;baseWidth=Math.min(width,height*552.0/768);baseHeight=baseWidth*768/552;
         reset();
     }
+    public CropWindow(CropWindow saved) {
+        imageWidth=saved.imageWidth;imageHeight=saved.imageHeight;baseWidth=saved.baseWidth;baseHeight=saved.baseHeight;
+        centerX=saved.centerX;centerY=saved.centerY;zoom=saved.zoom;
+    }
     public void reset(){zoom=1;centerX=imageWidth/2;centerY=imageHeight/2;}
     public double width(){return baseWidth/zoom;}
     public double height(){return baseHeight/zoom;}

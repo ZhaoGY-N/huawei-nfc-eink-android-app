@@ -12,8 +12,8 @@ public final class CropView extends View {
     private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
     private final ScaleGestureDetector detector;
     private float lastX,lastY;
-    public CropView(Context context,Bitmap image) {
-        super(context);this.image=image;crop=new CropWindow(image.getWidth(),image.getHeight());
+    public CropView(Context context,Bitmap image,CropWindow saved) {
+        super(context);this.image=image;crop=saved==null?new CropWindow(image.getWidth(),image.getHeight()):new CropWindow(saved);
         setContentDescription("裁切图片：单指拖动，双指缩放，白框为保留区域");
         detector=new ScaleGestureDetector(context,new ScaleGestureDetector.SimpleOnScaleGestureListener(){
             @Override public boolean onScale(ScaleGestureDetector d){
@@ -41,6 +41,7 @@ public final class CropView extends View {
     }
     @Override public boolean performClick(){super.performClick();return true;}
     public void reset(){crop.reset();invalidate();}
+    public CropWindow snapshot(){return new CropWindow(crop);}
     public Bitmap result(){
         int left=Math.max(0,(int)Math.floor(crop.left())),top=Math.max(0,(int)Math.floor(crop.top()));
         int right=Math.min(image.getWidth(),(int)Math.ceil(crop.left()+crop.width())),bottom=Math.min(image.getHeight(),(int)Math.ceil(crop.top()+crop.height()));

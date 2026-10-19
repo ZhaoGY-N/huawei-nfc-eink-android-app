@@ -36,6 +36,8 @@ public final class MainActivity extends Activity {
     private CheckBox dither,binary;
     private SeekBar threshold;
     private Bitmap source,originalSource;
+    private CropWindow appliedCrop;
+    private int cropRotation;
     private boolean cropped,editingCrop;
     private PanelImage.Prepared prepared;
     private int rotation,revision;
@@ -164,10 +166,10 @@ public final class MainActivity extends Activity {
         page.addView(text("0 ms 表示收到应答后立即再次查询，实际频率取决于通信耗时。",12,0xff68766e));
         page.addView(action("恢复默认参数",v->{power.setSelection(2);poll.setSelection(pollTimes.length-1);}));
         Button about=button("参考项目与许可证");about.setOnClickListener(v->showLicense());page.addView(about);
-        page.addView(text("墨水屏刷新测试 · v2.11-root-test6",12,0xff68766e));
+        page.addView(text("墨水屏刷新测试 · v2.11.1",12,0xff68766e));
         log=text("",11,0xff233c31);log.setTypeface(Typeface.MONOSPACE);log.setTextIsSelectable(true);log.setPadding(dp(10),dp(8),dp(10),dp(8));
         selectPage(getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("page",0));
-        append("v2.11-root-test6 就绪；统一使用 Shizuku Shell / Root 后端。");source=PanelImage.testPattern();originalSource=source;prepare();
+        append("v2.11.1 就绪；统一使用 Shizuku Shell / Root 后端。");source=PanelImage.testPattern();originalSource=source;prepare();
     }
     private void section(LinearLayout page,String title){TextView t=text(title,18,0xff142f2a);t.setTypeface(null,Typeface.BOLD);t.setPadding(0,dp(12),0,dp(6));page.addView(t);}
     private void selectPage(int index){activePage=Math.max(0,Math.min(2,index));for(int i=0;i<3;i++){pageScrolls[i].setVisibility(i==activePage?View.VISIBLE:View.GONE);tabs[i].setTextColor(i==activePage?Color.WHITE:0xff52635d);tabs[i].setBackgroundTintList(android.content.res.ColorStateList.valueOf(i==activePage?0xff176b61:0xffe3eae6));}getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("page",activePage).apply();}
@@ -208,7 +210,9 @@ public final class MainActivity extends Activity {
     private void showCrop(){
         if(source==null||busy||preparing||editingCrop)return;
         try {
-            final CropView cropView=new CropView(this,PanelImage.rotated(source,rotation));
+            final int angle=((cropped?cropRotation:0)+rotation)%360;
+            // Always edit the full source; the last applied window is copied so cancel is harmless.
+            final CropView cropView=new CropView(this,PanelImage.rotated(originalSource,angle),cropped&&angle==cropRotation?appliedCrop:null);
             LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(12),0,dp(12),0);
             content.addView(text("单指拖动，双指缩放；白框内为保留区域。",13,0xff52635d));
             content.addView(cropView,new LinearLayout.LayoutParams(-1,Math.min(dp(380),getResources().getDisplayMetrics().heightPixels/2)));
@@ -216,7 +220,13 @@ public final class MainActivity extends Activity {
             AlertDialog dialog=new AlertDialog.Builder(this).setTitle("裁切图片 · 屏幕比例").setView(content).setNegativeButton("取消",null).setNeutralButton("重置裁切",null).setPositiveButton("应用裁切",null).create();
             dialog.setOnDismissListener(d->{editingCrop=false;if(!destroyed)controls();});dialog.show();
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v->cropView.reset());
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{try{Bitmap result=cropView.result();source=result;rotation=0;cropped=true;dialog.dismiss();fit.setSelection(1);prepare();}catch(Exception e){Toast.makeText(this,"裁切失败："+e.getMessage(),Toast.LENGTH_LONG).show();}});
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{try{
+                Bitmap result=cropView.result();appliedCrop=cropView.snapshot();cropRotation=angle;source=result;rotation=0;cropped=true;
+                // Dismiss callbacks can arrive later. Release this guard before prepare(),
+                // even when "fill" was already selected and no spinner callback will fire.
+                editingCrop=false;
+                dialog.dismiss();fit.setSelection(1);prepare();
+            }catch(Exception e){Toast.makeText(this,"裁切失败："+e.getMessage(),Toast.LENGTH_LONG).show();}});
         }catch(Exception e){editingCrop=false;controls();Toast.makeText(this,"无法打开裁切："+e.getMessage(),Toast.LENGTH_LONG).show();}
     }
     private void confirmRefresh(){
