@@ -47,7 +47,7 @@ public final class MainActivity extends Activity {
     private String imageName="内置四色测试图";
     private volatile boolean busy,preparing,resumed,destroyed;
     private volatile File stopFile;
-    private CheckBox sn220Hook;
+    private Spinner discoveryBackend;
     private TextView authorizationInfo;
     private int bridgeUid=-1;
     private final LinearLayout[] pageBodies=new LinearLayout[3];
@@ -57,7 +57,7 @@ public final class MainActivity extends Activity {
     private TextView chipInfo,capabilityInfo;
     private android.app.Dialog previewDialog;
     private volatile android.os.IBinder bridgeBinder;
-    private final Shizuku.UserServiceArgs bridgeArgs=new Shizuku.UserServiceArgs(new android.content.ComponentName("org.nfcresearch.qpolllab","org.nfcresearch.qpolllab.ShellBridge")).tag("nfc-shell").version(24).daemon(false).processNameSuffix("nfc_shell");
+    private final Shizuku.UserServiceArgs bridgeArgs=new Shizuku.UserServiceArgs(new android.content.ComponentName("org.nfcresearch.qpolllab","org.nfcresearch.qpolllab.ShellBridge")).tag("nfc-shell").version(26).daemon(false).processNameSuffix("nfc_shell");
     private final android.content.ServiceConnection bridgeConnection=new android.content.ServiceConnection(){
         public void onServiceConnected(android.content.ComponentName name,android.os.IBinder binder){
             Parcel request=Parcel.obtain(),reply=Parcel.obtain();
@@ -106,8 +106,9 @@ public final class MainActivity extends Activity {
         authorizationInfo=text("Shizuku 未连接",14,0xff52635d);page.addView(authorizationInfo);
         page.addView(action("Shizuku 授权 / 连接",v->connectShizuku()));
         page.addView(text("在 Shizuku 中通过无线调试或 Root 启动服务，再点击授权 / 连接。更换启动方式后重新连接。",12,0xff68766e));
-        sn220Hook=new CheckBox(this);sn220Hook.setText("SN220 Q-Poll 兼容（实验，需要 Shizuku Root）");idleControls.add(sn220Hook);page.addView(sn220Hook);
-        page.addView(text("仅在系统 Q-Poll 不可用、且手机使用受支持的 SN220 HAL 时尝试。会话期间临时适配 NFC 服务；不代表所有 SN220 手机受支持。",12,0xff68766e));
+        page.addView(text("Q-Poll 寻卡方式",14,0xff263e35));
+        discoveryBackend=spinner(new String[]{"系统 QTag（默认）","SN220 HAL 兼容（实验，需 Root）","直接 Q-Poll（实验，SN100U 待验证）"});page.addView(discoveryBackend);
+        page.addView(text("QTag 被拒绝时可手动尝试直接 Q-Poll。直接方式需要可读的 NFC 日志；控制器接受命令后，仍需验证屏幕标签回调。检查 NFC 与普通 NFC-A 对照使用系统方式。",12,0xff68766e));
         page.addView(action("检查芯片 / NFC",v->start("inspect")));
         section(page,"Q-Poll 能力测试");
         page.addView(text("测试会开启短时寻卡，不发送图像或刷新指令。",12,0xff68766e));
@@ -182,10 +183,10 @@ public final class MainActivity extends Activity {
         });
         calibration.addTo(page);
         Button about=button("参考项目与许可证");about.setOnClickListener(v->showLicense());page.addView(about);
-        page.addView(text("墨水屏刷新测试 · v2.12.0",12,0xff68766e));
+        page.addView(text("墨水屏刷新测试 · v2.12.0-reader-test1",12,0xff68766e));
         log=text("",11,0xff233c31);log.setTypeface(Typeface.MONOSPACE);log.setTextIsSelectable(true);log.setPadding(dp(10),dp(8),dp(10),dp(8));
         selectPage(getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("page",0));
-        append("v2.12.0 就绪；统一使用 Shizuku Shell / Root 后端。");source=PanelImage.testPattern();originalSource=source;calibration.restore(saved);prepare();
+        append("v2.12.0-reader-test1 就绪；统一使用 Shizuku Shell / Root 后端。");source=PanelImage.testPattern();originalSource=source;calibration.restore(saved);prepare();
     }
     private void section(LinearLayout page,String title){TextView t=text(title,18,0xff142f2a);t.setTypeface(null,Typeface.BOLD);t.setPadding(0,dp(12),0,dp(6));page.addView(t);}
     private void selectPage(int index){activePage=Math.max(0,Math.min(2,index));for(int i=0;i<3;i++){pageScrolls[i].setVisibility(i==activePage?View.VISIBLE:View.GONE);tabs[i].setTextColor(i==activePage?Color.WHITE:0xff52635d);tabs[i].setBackgroundTintList(android.content.res.ColorStateList.valueOf(i==activePage?0xff176b61:0xffe3eae6));}getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("page",activePage).apply();}
@@ -263,7 +264,7 @@ public final class MainActivity extends Activity {
     private void start(final String mode){
         if(busy||preparing||editingCrop||!resumed)return;
         try{if(!Shizuku.pingBinder()||Shizuku.checkSelfPermission()!=android.content.pm.PackageManager.PERMISSION_GRANTED||bridgeBinder==null||!bridgeBinder.isBinderAlive()){connectShizuku();return;}}catch(Exception e){append("请先连接 Shizuku："+e);return;}
-        final String transport=sn220Hook.isChecked()&&BackendPolicy.needsQPoll(mode)?"sn220":"system";
+        final String transport=BackendPolicy.needsQPoll(mode)?new String[]{"system","sn220","direct"}[discoveryBackend.getSelectedItemPosition()]:"system";
         try{BackendPolicy.validate(bridgeUid,mode,transport);}catch(Exception e){append(e.getMessage());return;}
         final int seconds=durations[duration.getSelectedItemPosition()];
         if(mode.equals("refresh")&&(prepared==null||prepared.panelType.isEmpty())){append("请先在图像与发送页选择屏幕类型 A0 或 A1。");return;}
@@ -278,7 +279,7 @@ public final class MainActivity extends Activity {
         if(mode.equals("qtag"))capabilityInfo.setText("Q-Poll：测试中，等待实际寻卡命令与响应…");
         stopFile=sessionStop;busy=true;terminal=false;scanning=false;failure.clear();controls();progress.setProgress(0);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        state.setText("连接 Shizuku / NFC");detail.setText(transport.equals("sn220")?"准备 SN220 兼容层":"使用系统 Q-Poll 后端");
+        state.setText("连接 Shizuku / NFC");detail.setText(transport.equals("sn220")?"准备 SN220 兼容层":transport.equals("direct")?"准备直接 Q-Poll 寻卡":"使用系统 NFC 后端");
         append("──────── "+mode+" · 寻卡 "+seconds+" 秒 ────────");
         new Thread(()->{try{
             runBridge(mode,seconds,jobFile,imageFile,sessionStop);

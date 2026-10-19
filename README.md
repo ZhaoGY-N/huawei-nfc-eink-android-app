@@ -1,6 +1,6 @@
 # Huawei NFC E-Ink Android App
 
-Android 墨水屏刷新工具，当前版本 **v2.12.0**。统一通过 Shizuku（Shell / Root）调用兼容系统的 NXP Q-Poll，再通过 Android ISO-DEP 向 **552×768 四色华为 A0 / A1 墨水屏**传图刷新，使用板内已存驱动。
+Android 墨水屏刷新工具，当前实验版本 **v2.12.0-reader-test1**（基于 v2.12.0）。统一通过 Shizuku（Shell / Root）调用兼容系统的 NXP Q-Poll，再通过 Android ISO-DEP 向 **552×768 四色华为 A0 / A1 墨水屏**传图刷新，使用板内已存驱动。
 
 ## 功能
 
@@ -19,6 +19,28 @@ Android 墨水屏刷新工具，当前版本 **v2.12.0**。统一通过 Shizuku�
 4. 点击“发送当前预览到墨水屏”，核对图片和参数后确认。持续贴合并保持应用在前台，直到操作结束。
 
 仅适用于兼容 Q-Poll 的手机系统及相同原厂配置的目标屏；不能仅凭接口存在或型号名称判定兼容。刷新结果取决于实际供能与屏幕状态。中断可能留下不完整画面，程序不会自动重发刷新指令。
+
+## ReaderMode 系统接口兼容
+
+针对 issue #5，worker 在发送 QTag 或启动读卡前，检查当前系统 `INfcAdapter.setReaderMode` 的实际签名：优先使用五参数版本（含包名），不存在时使用四参数版本。开启、重新寻卡和退出清理复用同一个接口；不按 Android 版本号硬编码，也不需要替换手机系统文件。
+
+日志 `READER_API` 显示所选参数个数，`READER_API_MISSING` 表示两种签名均不存在，`READER_CALL_FAILED` 表示接口存在但调用失败。接口不存在时不尝试开启 ReaderMode，避免因此误报 ReaderMode 恢复失败；权限或服务异常保留原始原因，不切换重试其他重载。
+
+四参数适配通过离线模拟接口验证；realme RMX3888 / Android 15 的实际调用、寻卡及恢复仍需实机测试。
+
+## 直接 Q-Poll 实验路径（reader-test1）
+
+根据 [issue #5 的补充实测](https://github.com/ZhaoGY-N/huawei-nfc-eink-android-app/issues/5#issuecomment-6273145604)，RMX3888 / SN100U 在绕过 ReaderMode 的临时测试中，两轮均接受 `210303017101`；这还没有验证 Android Tag 回调和墨水屏通信。本版本增加独立选项，继续验证完整系统路径。
+
+在“设备与检测 → Q-Poll 寻卡方式”手动选择“直接 Q-Poll（实验，SN100U 待验证）”。默认仍为系统 QTag；选项不跨重启保存。检查 NFC 和普通 NFC-A 对照始终使用系统方式，直接路径不注入 SN220 HAL 兼容库。Shell / Root 后端均保持 worker 的 UID 2000 与 shell SELinux 域检查，系统拒绝调用时停止。
+
+直接路径先注册四参数或五参数 ReaderMode 回调，等待系统普通寻卡成功响应，再依次发送 `RF_DEACTIVATE`（`21060100`）与 Q-Poll `RF_DISCOVER`（`210303017101`）。两条命令都必须在 HAL 日志中匹配实际发送及 `STATUS_OK`；API 返回 0 本身不算成功。日志不可用、响应缺失、命令被拒绝、寻卡命令交错或用户停止时，不继续后续步骤。每次响应等待上限 3 秒，系统 Binder 调用时限仍由 ROM 控制。
+
+停止、异常和重连均先停止直接 Q-Poll，再释放 ReaderMode，并等待系统普通寻卡的发送与成功响应；恢复证据不足时报告 `RESTORE_FAILED`，需关闭再开启 NFC。清理期间继续读取日志，停止标记不阻止恢复命令。不硬编码普通寻卡配置，也不替换系统文件。
+
+仅在直接 Q-Poll 阶段接受标签回调；仍使用 Android IsoDep 和原有屏幕协议校验。若控制器已接受 `0x71` 却没有 Tag，不能认定屏幕已兼容；可能仍需针对该 ROM 的发现/激活通知进行适配。本版本没有把 `0x71` 通知伪装成普通 NFC-A，也没有扩展 SN220 HAL 注入范围。QTag 被拒绝的日志改为说明当前路径失败，不据此判定硬件不支持 Q-Poll。
+
+建议实机验证顺序：普通 NFC-A 对照 → 直接 Q-Poll 能力测试 → 贴屏只读 D1 → 发送图片。重点保留 `READER_API`、`DIRECT_ACK`、`CAPABILITY`、`TAG`、`READER_OFF` 与 `RESTORED` / `RESTORE_FAILED` 日志。离线回归覆盖精确命令顺序、异步响应、四/五参数选择、主机成功但无控制器响应、异常状态、取消、重连和恢复失败；实机结果仍待确认。
 
 ## 屏幕校色（v2.12.0）
 
@@ -61,7 +83,7 @@ python3 tests/check_fixtures.py build/<protocol-tests-directory>
 APK 和 SHA-256 输出在 `dist/`。首次构建会在 `build/` 生成本地调试签名密钥；密钥、构建缓存和 APK 不纳入 Git。自行构建时需要保留自己的密钥，以支持后续覆盖安装。
 
 ```sh
-adb install -r dist/QPollLab-2.12.0.apk
+adb install -r dist/QPollLab-2.12.0-reader-test1.apk
 ```
 
 ## 隐私

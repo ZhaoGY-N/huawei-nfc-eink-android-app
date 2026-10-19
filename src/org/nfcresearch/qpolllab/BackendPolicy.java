@@ -14,7 +14,7 @@ public final class BackendPolicy {
         if(uid!=0 && uid!=2000)throw new SecurityException("请通过 Shizuku Root 或 Shell 启动后端");
         if(!Arrays.asList("inspect","standard","qtag","identity","refresh").contains(mode))
             throw new IllegalArgumentException("Unknown NFC mode");
-        if(!transport.equals("system") && !transport.equals("sn220"))throw new IllegalArgumentException("Unknown discovery backend");
+        if(!transport.equals("system") && !transport.equals("sn220") && !transport.equals("direct"))throw new IllegalArgumentException("Unknown discovery backend");
         if(transport.equals("sn220") && uid!=0 && needsQPoll(mode))
             throw new SecurityException("SN220 兼容层需要 Shizuku 以 Root 启动；当前是 Shell 权限");
     }

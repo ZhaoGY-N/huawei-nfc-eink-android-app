@@ -21,6 +21,10 @@ subprocess.run([str(jdk / 'bin/javac'), '-encoding', 'UTF-8', '--release', '8', 
     str(root / 'src/org/nfcresearch/qpolllab/SessionFailure.java'),
     str(root / 'src/org/nfcresearch/qpolllab/NciDiscovery.java'),
     str(root / 'src/org/nfcresearch/qpolllab/BackendPolicy.java'),
+    str(root / 'src/org/nfcresearch/qpolllab/ReaderModeCompat.java'),
+    str(root / 'src/org/nfcresearch/qpolllab/DirectQPoll.java'),
+    str(root / 'tests/DirectQPollTest.java'),
+    str(root / 'tests/ReaderModeCompatTest.java'),
     str(root / 'tests/BackendPolicyTest.java'),
     str(root / 'tests/ConnectionRetryTest.java'),
     str(root / 'tests/SessionFailureTest.java'),
@@ -31,7 +35,7 @@ subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpollla
 subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.ImageBlocksTest'], check=True)
 subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.ImageRasterTest', str(out)], check=True)
 subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.CropWindowTest'], check=True)
-for test in ('CalibrationTest', 'PanelTypeTest', 'ConnectionRetryTest', 'SessionFailureTest', 'NciDiscoveryTest', 'BackendPolicyTest'):
+for test in ('CalibrationTest', 'PanelTypeTest', 'ConnectionRetryTest', 'SessionFailureTest', 'NciDiscoveryTest', 'BackendPolicyTest', 'ReaderModeCompatTest', 'DirectQPollTest'):
     subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.' + test, str(out)], check=True)
 (root / 'build/last-test-dir.txt').write_text(out.name, encoding='utf-8')
 print('FIXTURES:', out)

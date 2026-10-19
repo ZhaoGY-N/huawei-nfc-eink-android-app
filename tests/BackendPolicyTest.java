@@ -7,6 +7,11 @@ public final class BackendPolicyTest {
     public static void main(String[] args)throws Exception {
         for(int uid:new int[]{0,2000})for(String mode:new String[]{"inspect","standard","qtag","identity","refresh"})BackendPolicy.validate(uid,mode,"system");
         BackendPolicy.validate(0,"refresh","sn220");
+        for(int uid:new int[]{0,2000})for(String mode:new String[]{"qtag","identity","refresh"}){
+            BackendPolicy.validate(uid,mode,"direct");
+            List<String> direct=BackendPolicy.workerCommand(uid,"apk",mode,10,"stop","lock","job","direct");
+            check(uid==2000?direct.get(direct.size()-1).equals("direct"):direct.get(3).contains("direct"));
+        }
         rejected(()->BackendPolicy.validate(2000,"refresh","sn220"));
         rejected(()->BackendPolicy.validate(10001,"identity","system"));
         rejected(()->BackendPolicy.validate(0,"unknown","system"));
