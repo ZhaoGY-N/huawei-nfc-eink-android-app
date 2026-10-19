@@ -79,7 +79,9 @@ public final class PanelProtocol {
             if(actual==null||actual.length==0)continue;
             boolean matches=tags[i]==0xD1?actual[0]==1:Arrays.equals(actual,expected[i]);
             if(tags[i]==0xA1&&Arrays.equals(actual,hex("01120030FFFFFF")))matches=true;
-            if(!matches)mismatch.append(String.format("\n%02X%s：期望=%s，实际=%s",tags[i],tags[i]==0xD1?" 首字节":"",toHex(expected[i]),toHex(actual)));
+            // Reference device.py recognizes both registered FMSC APPIDs.
+            if(tags[i]==0xC0&&Arrays.equals(actual,hex("00000001")))matches=true;
+            if(!matches)mismatch.append(String.format("\n%02X%s：期望=%s，实际=%s",tags[i],tags[i]==0xD1?" 首字节":"",tags[i]==0xC0?"201EA001 或 00000001":toHex(expected[i]),toHex(actual)));
         }
         if(mismatch.length()>0)
             throw new IllegalArgumentException("目标配置与已验证的原厂扫描配置不匹配；不会改写 DB/DA"+mismatch);

@@ -16,3 +16,5 @@ lzokay is used only by the host-side test script and is not part of the APK.
 
 
 Shizuku API 13.1.5 (api, provider, aidl, shared), copyright Rikka and contributors, MIT License. Source: https://github.com/RikkaApps/Shizuku-API . Full license: assets/licenses/Shizuku-LICENSE.txt.
+
+The experimental SN220 Root discovery adapter follows the publicly documented approach in HBWuChang's issue https://github.com/ZhaoGY-N/huawei-nfc-eink-android-app/issues/3 and device fork https://github.com/HBWuChang/huawei-nfc-eink-android-app . The implementation in `native/` is written for this branch and built locally; the fork's precompiled injectors/libraries are not redistributed. No NFC firmware, system HAL library, or display driver is included.

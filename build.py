@@ -20,6 +20,21 @@ dist = root / "dist"
 for directory in (build / "classes", build / "dex", dist):
     directory.mkdir(parents=True, exist_ok=True)
 env = dict(os.environ, JAVA_HOME=str(jdk), PATH=str(jdk / "bin") + os.pathsep + os.environ.get("PATH", ""))
+if os.environ.get("ANDROID_NDK_HOME"):
+    subprocess.run(["sh", str(root / "native/build.sh")], cwd=root, env=env, check=True)
+native_manifest = root / "assets/native/build.sha256"
+if not native_manifest.exists():
+    raise RuntimeError("Build native assets first: ANDROID_NDK_HOME=... sh native/build.sh")
+native_inputs = {"native/build.sh", "native/nci_rewrite.h", "native/hal_discovery.h", "native/hal_name.h", "native/hook_debug.h", "native/owned_hook.h", "native/qpoll_hook.c", "native/qpoll_inject.c",
+                 "assets/native/arm64-v8a/libqpollhook.so", "assets/native/arm64-v8a/qpoll-inject"}
+manifest_lines = native_manifest.read_text().splitlines()
+if {line.split(maxsplit=1)[1] for line in manifest_lines} != native_inputs:
+    raise RuntimeError("Incomplete native manifest; rebuild native/build.sh")
+for line in manifest_lines:
+    expected, relative = line.split(maxsplit=1)
+    source = (root / relative).resolve()
+    if not source.is_relative_to(root) or hashlib.sha256(source.read_bytes()).hexdigest() != expected:
+        raise RuntimeError("Native assets are stale; rebuild native/build.sh: " + relative)
 libraries = []
 for aar in sorted((root / "libs").glob("*-13.1.5.aar")):
     jar = build / (aar.stem + ".jar")

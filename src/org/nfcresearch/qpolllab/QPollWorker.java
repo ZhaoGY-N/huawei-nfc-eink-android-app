@@ -35,6 +35,9 @@ public final class QPollWorker {
     private static volatile String qtagRejection;
     private static volatile boolean qDiscoverySent,qDiscoveryAccepted;
     private static String mode;
+    private static boolean halDiscovery;
+    private static boolean hookRestored=true;
+    private static File hookOffAck;
     private static final Binder callbackBinder = new Binder() {
         @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
                 throws RemoteException {
@@ -81,14 +84,17 @@ public final class QPollWorker {
         Bundle extras=new Bundle();
         if("refresh".equals(mode)||"identity".equals(mode))extras.putInt("presence",5000);
         invoke("setReaderMode", new Class<?>[]{IBinder.class, Class.forName("android.nfc.IAppCallback"),
-                int.class, Bundle.class, String.class}, token, callback, flags, extras, android.os.Process.myUid()==2000?"com.android.shell":"android");
+                int.class, Bundle.class, String.class}, token, callback, flags, extras, "com.android.shell");
     }
     private static int qtag(int action) throws Exception {
         return (Integer) invoke("sendVendorNciMessage", new Class<?>[]{int.class,int.class,int.class,byte[].class},
                 1, 15, 112, new byte[]{0x31, (byte) action});
     }
     private static void init() throws Exception {
-        if (android.os.Process.myUid() != 0 && android.os.Process.myUid()!=2000) throw new SecurityException("需要 Shizuku 或 Root 授权");
+        if (android.os.Process.myUid()!=2000) throw new SecurityException("NFC worker 必须以 UID 2000 运行；Root 后端切换身份失败，未调用 NFC");
+        String domain=new String(java.nio.file.Files.readAllBytes(new File("/proc/self/attr/current").toPath()),"UTF-8").replace("\u0000","").trim();
+        if(!domain.equals("u:r:shell:s0"))throw new SecurityException("NFC worker SELinux 域不是 shell："+domain);
+        emit("WORKER_IDENTITY","UID=2000；SELinux="+domain);
         Object binder = Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "nfc");
         if (binder == null) throw new IllegalStateException("未找到 NFC 服务");
         adapterType = Class.forName("android.nfc.INfcAdapter");
@@ -143,6 +149,13 @@ public final class QPollWorker {
     }
     private static synchronized void cleanup() {
         if (!cleaned.compareAndSet(false, true)) return;
+        if(halDiscovery&&readerTouched){
+            emit("HOOK_RESTORE_REQUEST","先读取注入统计并关闭兼容开关，再恢复普通寻卡");
+            long deadline=SystemClock.elapsedRealtime()+20000;
+            while(hookOffAck!=null&&!hookOffAck.exists()&&SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(20);
+            hookRestored=hookOffAck!=null&&hookOffAck.exists();
+            if(!hookRestored)emit("RESTORE_FAILED","未收到 Root 兼容层关闭确认，请重启 NFC");
+        }
         if (readerTouched) {
             try { reader(0); readerReleased = true; emit("READER_OFF", "ReaderMode 已释放"); }
             catch (Exception e) { emit("CLEANUP_ERROR", "释放 ReaderMode 失败：" + e); }
@@ -161,16 +174,20 @@ public final class QPollWorker {
         int exit = 0;
         boolean sessionStarted = false;
         try {
-            if ((args.length != 4&&args.length!=5) || !(args[0].equals("inspect") || args[0].equals("qtag") || args[0].equals("standard")||args[0].equals("identity")||args[0].equals("refresh")))
+            if (args.length != 6 || !(args[0].equals("inspect") || args[0].equals("qtag") || args[0].equals("standard")||args[0].equals("identity")||args[0].equals("refresh")))
                 throw new IllegalArgumentException("Invalid mode or argument count");
             mode=args[0];
+            BackendPolicy.validate(android.os.Process.myUid(),mode,"system");
+            if(!args[5].equals("sn220")&&!args[5].equals("system"))throw new IllegalArgumentException("Unknown discovery backend");
+            halDiscovery=args[5].equals("sn220")&&BackendPolicy.needsQPoll(mode);
+            hookRestored=!halDiscovery;
             boolean panelOperation=mode.equals("identity")||mode.equals("refresh");
-            if(panelOperation&&args.length!=5)throw new IllegalArgumentException("Missing private image job");
             int seconds = Integer.parseInt(args[1]);
             if (seconds < 1 || seconds > 60) throw new IllegalArgumentException("时长超出当前模式允许范围");
             File stopFile = new File(args[2]);
+            hookOffAck=new File(stopFile.getParentFile(),"hook-off-ack");
             if (stopFile.exists()) { emit("END", "已取消，未启动寻卡"); return; }
-            // App creates this private file before invoking root; no global writable lock path.
+            // Bridge prepares a shell-owned lock; it survives bridge death while this worker runs.
             try (RandomAccessFile lockFile = new RandomAccessFile(args[3], "rw"); FileLock lock = lockFile.getChannel().tryLock()) {
                 if (lock == null) throw new IllegalStateException("另一轮测试正在运行");
                 try {
@@ -185,12 +202,13 @@ public final class QPollWorker {
                 setupCallback();
                 Runtime.getRuntime().addShutdownHook(new Thread(QPollWorker::cleanup));
                 startLogcat();
-                if (args[0].equals("qtag")||panelOperation) {
+                if ((args[0].equals("qtag")||panelOperation)&&!halDiscovery) {
                     qtagTouched = true;
                     int status = qtag(1);
                     emit("QTAG_ON", "启用 QTag，API 状态=" + status + "（只是主机状态）");
                     if (status != 0) throw new IllegalStateException("QTag 启用失败");
                 }
+                if(halDiscovery)emit("HOOK","使用 HAL Q-Poll 兼容层，跳过系统 QTag 命令");
                 readerTouched = true;
                 reader(0x81); // NFC-A + skip NDEF; the NXP extension rewrites discovery to Q_POLL.
                 sessionStarted = true;
@@ -240,7 +258,7 @@ public final class QPollWorker {
         } finally {
             cleanup();
             if (readerTouched || qtagTouched) {
-                boolean ok = (!readerTouched || readerReleased) && (!qtagTouched || qtagDisabled);
+                boolean ok = (!readerTouched || readerReleased) && (!qtagTouched || qtagDisabled) && (!halDiscovery || hookRestored);
                 emit(ok ? "RESTORED" : "RESTORE_FAILED", ok ? "已恢复普通寻卡" : "恢复未确认，请重启 NFC 开关后再试");
                 if (!ok) exit = 2;
             }

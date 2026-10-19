@@ -38,6 +38,12 @@ public final class ProtocolTest {
         boolean emitted(String kind){for(String e:events)if(e.startsWith(kind+"|"))return true;return false;}
     }
     static void passed(String label){cases++;System.out.println("PASS "+label);}
+    static byte[] withAppId(String value){
+        byte[] info=INFO.clone(),appId=PanelProtocol.hex(value);
+        for(int i=0;i<info.length-2;){int tag=info[i++]&255,n=info[i++]&255;
+            if(tag==0xC0){eq(appId.length==n,"APPID fixture length");System.arraycopy(appId,0,info,i,n);return info;}i+=n;}
+        throw new AssertionError("C0 fixture missing");
+    }
     static byte[] withUid(byte[] uid){
         ByteArrayOutputStream out=new ByteArrayOutputStream();
         for(int i=0;i<INFO.length-2;){int tag=INFO[i++]&255,n=INFO[i++]&255;
@@ -47,6 +53,14 @@ public final class ProtocolTest {
     }
     public static void main(String[] args)throws Exception{
         PanelProtocol.parseInfo(INFO);passed("synthetic D1 exact profile");
+        Fake factoryApp=new Fake();factoryApp.info=withAppId("00000001");factoryApp.run();
+        eq(factoryApp.d1==2&&factoryApp.d3==476&&factoryApp.d4==1&&factoryApp.emitted("REFRESH_DONE"),"registered factory APPID passes initial and pre-write checks");
+        passed("00000001 APPID follows full upload and refresh path");
+        Fake unknownApp=new Fake();unknownApp.info=withAppId("00000002");
+        try {unknownApp.run();throw new AssertionError("unknown APPID accepted");}
+        catch(IllegalArgumentException e){eq(e.getMessage().contains("C0：期望=201EA001 或 00000001，实际=00000002"),"APPID diagnostic lists both supported values");}
+        eq(unknownApp.d8+unknownApp.pin+unknownApp.d3+unknownApp.d4==0,"unknown APPID stops before authentication or writes");
+        passed("unknown APPID still rejected before authentication or writes");
         eq(PanelProtocol.parseInfo(withUid(PanelProtocol.hex("12345678"))).uid.equals("12345678"),"different UID is display only");
         eq(PanelProtocol.parseInfo(withUid(PanelProtocol.hex("01020304050607"))).uid.equals("01020304050607"),"no UID length restriction");
         eq(PanelProtocol.parseInfo(withUid(null)).uid.equals("未提供"),"UID field is optional");passed("different, longer and absent UID accepted without ID validation");

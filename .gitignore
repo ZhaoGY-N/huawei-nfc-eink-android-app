@@ -8,3 +8,4 @@ __pycache__/
 .env.*
 *.log
 /local.properties
+/assets/native/
