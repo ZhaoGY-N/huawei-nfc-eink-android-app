@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.nfcresearch.qpolllab" android:versionCode="25" android:versionName="2.12.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.nfcresearch.qpolllab" android:versionCode="26" android:versionName="2.13.0">
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />

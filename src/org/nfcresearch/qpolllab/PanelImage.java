@@ -113,6 +113,9 @@ public final class PanelImage {
         return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,null,false);
     }
     public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,boolean chart) {
+        return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,chart,ImageAdjustments.NONE);
+    }
+    public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,boolean chart,ImageAdjustments adjustments) {
         if(chart){
             byte[] codes=CalibrationPalette.chart(552,768);PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
             byte[] packed=type.pack(codes);
@@ -127,6 +130,7 @@ public final class PanelImage {
         canvas.drawBitmap(input,null,new RectF((552-w)/2,(768-h)/2,(552+w)/2,(768+h)/2),new Paint(Paint.FILTER_BITMAP_FLAG));
         int[] pixels=new int[552*768];
         fitted.getPixels(pixels,0,552,0,0,552,768);
+        adjustments.applyTo(pixels);
         byte[] codes=calibrated==null||binary?ImageRaster.quantize(pixels,552,768,binary,threshold,dither,block)
             :CalibratedRaster.quantize(pixels,552,768,dither,block,calibrated);
         // An unselected panel can still preview; sending requires an explicit selection.
@@ -136,6 +140,7 @@ public final class PanelImage {
         Bitmap image=Bitmap.createBitmap(appearance,552,768,Bitmap.Config.ARGB_8888);
         String settings="屏幕："+(panelType.isEmpty()?"尚未选择":panelType)+" · "+(binary?"黑白二值化 · 阈值 "+threshold:"黑白黄红四色")+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭")+" · "+(cropped?"已手动裁切 · ":"")+"旋转 "+rotation+"° · "+(cover?"填满":"留白");
         settings+=calibrated==null?" · 校色：关闭":" · 校色：开启（近似实物色；黑白模式仍按阈值）";
+        settings+=" · "+adjustments.description();
         return new Prepared(image,packed,settings,panelType);
     }
 }
