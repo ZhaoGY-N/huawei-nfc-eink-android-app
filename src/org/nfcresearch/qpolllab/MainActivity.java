@@ -117,13 +117,13 @@ public final class MainActivity extends Activity {
         page.addView(text("未读到标签不等于不支持 Q-Poll；成功寻卡也不代表墨水屏供电与刷新已验证。",12,0xff68766e));
         section(page,"屏幕检测");
         page.addView(action("只读检查屏幕",v->start("identity")));
-        page.addView(text("读取并核对屏幕规格与原厂配置，不发送图像或启动刷新；无法自动识别 A0 / A1。",12,0xff68766e));
+        page.addView(text("读取并核对屏幕规格与原厂配置，不发送图像或启动刷新；无法自动识别 A0 / A1 / A0临时。",12,0xff68766e));
         page=pageBodies[1];section(page,"图像与发送");
         page.addView(text("屏幕类型",14,0xff52635d));
-        panelType=spinner(new String[]{"请选择屏幕类型","A0 · 华为 552×768 四色","A1 · 华为 552×768 四色"});
+        panelType=spinner(new String[]{"请选择屏幕类型","A0 · 华为 552×768 四色","A1 · 华为 552×768 四色","A0临时 · 左右半屏互换"});
         String savedPanel=getSharedPreferences("refresh-settings",MODE_PRIVATE).getString("panelType","");
-        panelType.setSelection(savedPanel.equals("A0")?1:savedPanel.equals("A1")?2:0);page.addView(panelType);
-        page.addView(text("按实物选择 A0 或 A1；无法自动识别。更换屏幕后请核对选择。",12,0xff68766e));
+        panelType.setSelection(savedPanel.equals("A0")?1:savedPanel.equals("A1")?2:savedPanel.equals("A0X")?3:0);page.addView(panelType);
+        page.addView(text("按实物选择 A0 或 A1；A0临时仅用于左右半屏互换的实物。无法自动识别，更换屏幕后请核对选择。",12,0xff68766e));
         preview=new PixelPreview(this);preview.setContentDescription("最终写入像素预览，仅黑白黄红；点击放大 · 双指缩放");page.addView(preview,new LinearLayout.LayoutParams(-1,dp(250)));
         preview.setOnClickListener(v->showPixels());
         refresh=action("发送当前预览到墨水屏",v->confirmRefresh());refresh.setTextColor(Color.WHITE);refresh.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff176b61));page.addView(refresh);
@@ -198,7 +198,7 @@ public final class MainActivity extends Activity {
     private Button action(String s,View.OnClickListener listener){Button b=button(s);b.setOnClickListener(listener);idleControls.add(b);return b;}
     private Spinner spinner(String[] values){Spinner s=new Spinner(this);s.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,values));idleControls.add(s);return s;}
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
-    private String selectedPanelType(){int pos=panelType.getSelectedItemPosition();return pos==1?"A0":pos==2?"A1":"";}
+    private String selectedPanelType(){int pos=panelType.getSelectedItemPosition();return pos==1?"A0":pos==2?"A1":pos==3?"A0X":"";}
     private void controls(){
         boolean enabled=!busy&&!preparing&&!editingCrop;for(View v:idleControls)v.setEnabled(enabled);
         boolean edit=enabled&&!calibrationChart;
@@ -256,7 +256,7 @@ public final class MainActivity extends Activity {
     }
     private void confirmRefresh(){
         if(busy||preparing||prepared==null)return;
-        if(prepared.panelType.isEmpty()){Toast.makeText(this,"请先选择屏幕类型 A0 或 A1",Toast.LENGTH_LONG).show();return;}
+        if(prepared.panelType.isEmpty()){Toast.makeText(this,"请先选择屏幕类型 A0、A1 或 A0临时",Toast.LENGTH_LONG).show();return;}
         new AlertDialog.Builder(this).setTitle("将当前预览写入墨水屏？")
             .setMessage("这会替换当前贴合墨水屏的画面。\n\n目标：相同原厂配置的 552×768 四色屏（不限 UID）\n图片："+imageName+"\n"+prepared.settings+"\n上电等待："+powerTimes[power.getSelectedItemPosition()]+" ms\n忙状态查询间隔："+pollTimes[poll.getSelectedItemPosition()]+" ms\n\n仅贴放要刷新的那块屏。请贴稳，全程保持应用在前台和 NFC 供能，直到日志提示结束。中断可能留下不完整画面。")
             .setNegativeButton("返回预览",null).setPositiveButton("确认并开始刷新",(d,w)->start("refresh")).show();
@@ -267,7 +267,7 @@ public final class MainActivity extends Activity {
         final String transport=BackendPolicy.needsQPoll(mode)?new String[]{"system","sn220","direct"}[discoveryBackend.getSelectedItemPosition()]:"system";
         try{BackendPolicy.validate(bridgeUid,mode,transport);}catch(Exception e){append(e.getMessage());return;}
         final int seconds=durations[duration.getSelectedItemPosition()];
-        if(mode.equals("refresh")&&(prepared==null||prepared.panelType.isEmpty())){append("请先在图像与发送页选择屏幕类型 A0 或 A1。");return;}
+        if(mode.equals("refresh")&&(prepared==null||prepared.panelType.isEmpty())){append("请先在图像与发送页选择屏幕类型 A0、A1 或 A0临时。");return;}
         final String id=Long.toString(SystemClock.elapsedRealtime());
         final File sessionStop=new File(getFilesDir(),"stop-"+id),jobFile=new File(getFilesDir(),"job-"+id+".json"),imageFile=new File(getFilesDir(),"image-"+id+".bin");
         try{
