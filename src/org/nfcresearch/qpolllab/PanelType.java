@@ -2,14 +2,26 @@ package org.nfcresearch.qpolllab;
 
 /** Huawei JD79665AA panel variants; selection is physical, never inferred from D1. */
 public enum PanelType {
-    A0, A1;
+    A0, A1, A0X;
     public static PanelType parse(String value) {
         if("A0".equals(value))return A0;
         if("A1".equals(value))return A1;
-        throw new IllegalArgumentException("请先选择屏幕类型 A0 或 A1");
+        if("A0X".equals(value))return A0X;
+        throw new IllegalArgumentException("请先选择屏幕类型 A0、A1 或 A0临时");
     }
     public byte[] pack(byte[] codes) {
-        return map(PanelProtocol.packCodes(codes,PanelProtocol.WIDTH,PanelProtocol.HEIGHT),false);
+        byte[] raw=PanelProtocol.packCodes(codes,PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
+        if(this==A0X)raw=swapHalves(raw);
+        return map(raw,false);
+    }
+    /** Temporary variant: swap the logical left/right image halves before the A0 layout. */
+    private static byte[] swapHalves(byte[] data) {
+        if(data.length!=PanelProtocol.IMAGE_BYTES)throw new IllegalArgumentException("屏幕数据长度错误");
+        int half=PanelProtocol.WIDTH/2*(PanelProtocol.HEIGHT/4);
+        byte[] out=new byte[data.length];
+        System.arraycopy(data,half,out,0,half);
+        System.arraycopy(data,0,out,half,half);
+        return out;
     }
     private byte[] map(byte[] raw,boolean inverse) {
         if(raw.length!=PanelProtocol.IMAGE_BYTES)throw new IllegalArgumentException("屏幕数据长度错误");
@@ -24,10 +36,14 @@ public enum PanelType {
         return out;
     }
     public int[] preview(byte[] packed) {
-        return ImageRaster.preview(map(packed,true),PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
+        byte[] data=map(packed,true);
+        if(this==A0X)data=swapHalves(data);
+        return ImageRaster.preview(data,PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
     }
     public int[] preview(byte[] packed,int[] palette) {
-        return ImageRaster.preview(map(packed,true),PanelProtocol.WIDTH,PanelProtocol.HEIGHT,palette);
+        byte[] data=map(packed,true);
+        if(this==A0X)data=swapHalves(data);
+        return ImageRaster.preview(data,PanelProtocol.WIDTH,PanelProtocol.HEIGHT,palette);
     }
     /** Stored scan 00 uses bottom-up pixels; scan 01 uses top-down pixels in each row. */
     public static byte[] forScan(byte[] packed,boolean topDown) {
