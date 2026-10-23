@@ -154,13 +154,13 @@ public final class QPollWorker {
                         String packet = line.substring(marker + 2).replaceAll("\\s+", "").toUpperCase(java.util.Locale.ROOT);
                         if(directSession!=null)directSession.observe(line.contains("NxpNciX"),packet);
                         if(!cleaned.get()&&line.contains("NxpNciX")&&NciDiscovery.hasQPoll(packet)){qDiscoverySent=true;emit("CAPABILITY","已发出 0x71 Q-Poll 寻卡，等待控制器确认。");}
-                        if(!cleaned.get()&&qDiscoverySent&&line.contains("NxpNciR")&&packet.startsWith("410301")&&packet.length()>=8){
+                        if(!directDiscovery&&!cleaned.get()&&qDiscoverySent&&line.contains("NxpNciR")&&packet.startsWith("410301")&&packet.length()>=8){
                             if(packet.substring(6,8).equals("00")){qDiscoveryAccepted=true;emit("CAPABILITY","已确认控制器接受 Q-Poll 寻卡（0x71）；目标屏通信与刷新需单独验证。");}
                             else emit("CAPABILITY","Q-Poll 寻卡被拒绝，响应状态="+packet.substring(6,8));
                         }
-                        if(line.contains("NxpNciR")&&packet.toUpperCase(java.util.Locale.ROOT).startsWith("4F7001")&&packet.length()>=8&&!cleaned.get()){
+                        if(qtagTouched&&line.contains("NxpNciR")&&packet.startsWith("4F7001")&&packet.length()>=8&&!cleaned.get()){
                             String status=packet.substring(6,8);
-                            if(!status.equals("00")){qtagRejection="系统拒绝 QTag，响应状态="+status+"；当前系统未成功开启 Q-Poll。";stopping.set(true);emit("QTAG_REJECTED",qtagRejection);}
+                            if(!status.equals("00")){qtagRejection="系统拒绝 QTag，响应状态="+status+"；本次 QTag 路径失败，不能据此判定硬件不支持 Q-Poll。";stopping.set(true);emit("QTAG_REJECTED",qtagRejection);}
                         }
                         if (line.contains("NxpNciX") && packet.startsWith("2103")) emit("RF_TX", packet);
                         if (line.contains("NxpNciR") && (packet.startsWith("4103") || packet.startsWith("6103") || packet.startsWith("6105"))) emit("RF_RX", packet);
