@@ -5,8 +5,19 @@ public final class BackendPolicyTest {
     private static void check(boolean value){if(!value)throw new AssertionError();}
     private static void rejected(Runnable action){try{action.run();throw new AssertionError("accepted invalid backend");}catch(SecurityException|IllegalArgumentException expected){}}
     public static void main(String[] args)throws Exception {
-        for(int uid:new int[]{0,2000})for(String mode:new String[]{"inspect","standard","qtag","identity","refresh"})BackendPolicy.validate(uid,mode,"system");
+        for(int uid:new int[]{0,2000})for(String mode:new String[]{"inspect","standard","qtag","identity","refresh","power"})BackendPolicy.validate(uid,mode,"system");
         BackendPolicy.validate(0,"refresh","sn220");
+        BackendPolicy.validate(0,"power","sn220");
+        rejected(()->BackendPolicy.validate(2000,"power","sn220"));
+        check(BackendPolicy.needsQPoll("power")&&!BackendPolicy.runsPanelProtocol("power"));
+        check(BackendPolicy.runsPanelProtocol("identity")&&BackendPolicy.runsPanelProtocol("refresh"));
+        for(String mode:new String[]{"inspect","standard","qtag"})check(!BackendPolicy.runsPanelProtocol(mode));
+        List<String> power=BackendPolicy.workerCommand(2000,"apk","power",300,"s","l","j","system");
+        check(power.get(3).equals("power")&&power.get(4).equals("300"));
+        rejected(()->BackendPolicy.workerCommand(2000,"apk","power",301,"s","l","j","system"));
+        rejected(()->BackendPolicy.workerCommand(2000,"apk","power",0,"s","l","j","system"));
+        rejected(()->BackendPolicy.workerCommand(2000,"apk","identity",61,"s","l","j","system"));
+        rejected(()->BackendPolicy.workerCommand(2000,"apk","refresh",300,"s","l","j","system"));
         rejected(()->BackendPolicy.validate(2000,"refresh","sn220"));
         rejected(()->BackendPolicy.validate(10001,"identity","system"));
         rejected(()->BackendPolicy.validate(0,"unknown","system"));

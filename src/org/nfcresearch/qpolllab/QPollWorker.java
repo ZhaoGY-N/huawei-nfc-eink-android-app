@@ -47,8 +47,17 @@ public final class QPollWorker {
             }
             if (code != discoveredCode && code != lostCode) return super.onTransact(code, data, reply, flags);
             data.enforceInterface("android.nfc.IAppCallback");
+            if (mode.equals("power") && code == lostCode) {
+                tagSeen.set(false);
+                emit("POWER_LOST", "标签已离场；请移动线圈并观察电压，等待系统重新寻卡");
+                if (reply != null) reply.writeNoException();
+                return true;
+            }
             Tag tag = data.readInt() == 0 ? null : Tag.CREATOR.createFromParcel(data);
-            if (code == discoveredCode && tag != null && tagSeen.compareAndSet(false,true)) {
+            if (mode.equals("power") && code == discoveredCode && tag != null) {
+                tagSeen.set(true);
+                emit("POWER_TAG", "系统已激活标签；保持供能会话，不读取 UID、屏幕规格或发送 APDU");
+            } else if (code == discoveredCode && tag != null && tagSeen.compareAndSet(false,true)) {
                 detectedTag=tag;
                 emit("TAG", "收到标签 UID=" + hex(tag.getId()) + "；技术=" + Arrays.toString(tag.getTechList()));
                 NfcA a = NfcA.get(tag);
@@ -82,7 +91,7 @@ public final class QPollWorker {
     }
     private static void reader(int flags) throws Exception {
         Bundle extras=new Bundle();
-        if("refresh".equals(mode)||"identity".equals(mode))extras.putInt("presence",5000);
+        if(BackendPolicy.runsPanelProtocol(mode)||"power".equals(mode))extras.putInt("presence",5000);
         invoke("setReaderMode", new Class<?>[]{IBinder.class, Class.forName("android.nfc.IAppCallback"),
                 int.class, Bundle.class, String.class}, token, callback, flags, extras, "com.android.shell");
     }
@@ -174,16 +183,17 @@ public final class QPollWorker {
         int exit = 0;
         boolean sessionStarted = false;
         try {
-            if (args.length != 6 || !(args[0].equals("inspect") || args[0].equals("qtag") || args[0].equals("standard")||args[0].equals("identity")||args[0].equals("refresh")))
+            if (args.length != 6)
                 throw new IllegalArgumentException("Invalid mode or argument count");
             mode=args[0];
             BackendPolicy.validate(android.os.Process.myUid(),mode,"system");
             if(!args[5].equals("sn220")&&!args[5].equals("system"))throw new IllegalArgumentException("Unknown discovery backend");
             halDiscovery=args[5].equals("sn220")&&BackendPolicy.needsQPoll(mode);
             hookRestored=!halDiscovery;
-            boolean panelOperation=mode.equals("identity")||mode.equals("refresh");
+            boolean panelOperation=BackendPolicy.runsPanelProtocol(mode);
+            boolean powerOnly=mode.equals("power");
             int seconds = Integer.parseInt(args[1]);
-            if (seconds < 1 || seconds > 60) throw new IllegalArgumentException("时长超出当前模式允许范围");
+            BackendPolicy.validateDuration(mode,seconds);
             File stopFile = new File(args[2]);
             hookOffAck=new File(stopFile.getParentFile(),"hook-off-ack");
             if (stopFile.exists()) { emit("END", "已取消，未启动寻卡"); return; }
@@ -202,7 +212,7 @@ public final class QPollWorker {
                 setupCallback();
                 Runtime.getRuntime().addShutdownHook(new Thread(QPollWorker::cleanup));
                 startLogcat();
-                if ((args[0].equals("qtag")||panelOperation)&&!halDiscovery) {
+                if (BackendPolicy.needsQPoll(mode)&&!halDiscovery) {
                     qtagTouched = true;
                     int status = qtag(1);
                     emit("QTAG_ON", "启用 QTag，API 状态=" + status + "（只是主机状态）");
@@ -213,6 +223,15 @@ public final class QPollWorker {
                 reader(0x81); // NFC-A + skip NDEF; the NXP extension rewrites discovery to Q_POLL.
                 sessionStarted = true;
                 emit("START", args[0] + ":" + seconds);
+                if(powerOnly) {
+                    PowerSession.hold(seconds,new PowerSession.Control() {
+                        public long now(){return SystemClock.elapsedRealtime();}
+                        public boolean cancelled(){return stopFile.exists();}
+                        public void check(){if(qtagRejection!=null)throw new IllegalStateException(qtagRejection);}
+                        public void sleep(long ms){SystemClock.sleep(ms);}
+                        public void event(String kind,String message){emit(kind,message);}
+                    });
+                } else {
                 long deadline = SystemClock.elapsedRealtime() + seconds * 1000L;
                 while (!stopping.get() && !stopFile.exists() && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100);
                 if(qtagRejection!=null)throw new IllegalStateException(qtagRejection);
@@ -247,6 +266,7 @@ public final class QPollWorker {
                 else if (tagSeen.get()) emit("RESULT", "已收到标签；只显示元信息，未发送 APDU");
                 else if (stopFile.exists()) emit("RESULT", "用户停止；未收到标签");
                 else emit("RESULT", "本轮超时，未收到标签；不能据此认定硬件不支持");
+                }
                 } finally { cleanup(); }
             }
         } catch (InterruptedException e) {

@@ -6,13 +6,21 @@ import java.util.List;
 
 /** Privilege decisions shared by the UI/service; workers always use shell UID. */
 public final class BackendPolicy {
+    public static final int POWER_SECONDS = 300;
     private BackendPolicy() {}
     public static boolean needsQPoll(String mode) {
-        return mode.equals("qtag") || mode.equals("identity") || mode.equals("refresh");
+        return mode.equals("qtag") || mode.equals("identity") || mode.equals("refresh") || mode.equals("power");
+    }
+    public static boolean runsPanelProtocol(String mode) {
+        return mode.equals("identity") || mode.equals("refresh");
+    }
+    public static void validateDuration(String mode, int seconds) {
+        if(seconds<1 || seconds>(mode.equals("power")?POWER_SECONDS:60))
+            throw new IllegalArgumentException("时长超出当前模式允许范围");
     }
     public static void validate(int uid, String mode, String transport) {
         if(uid!=0 && uid!=2000)throw new SecurityException("请通过 Shizuku Root 或 Shell 启动后端");
-        if(!Arrays.asList("inspect","standard","qtag","identity","refresh").contains(mode))
+        if(!Arrays.asList("inspect","standard","qtag","identity","refresh","power").contains(mode))
             throw new IllegalArgumentException("Unknown NFC mode");
         if(!transport.equals("system") && !transport.equals("sn220"))throw new IllegalArgumentException("Unknown discovery backend");
         if(transport.equals("sn220") && uid!=0 && needsQPoll(mode))
@@ -22,7 +30,7 @@ public final class BackendPolicy {
     public static List<String> workerCommand(int uid, String apk, String mode, int seconds,
             String stop, String lock, String job, String transport) {
         validate(uid,mode,transport);
-        if(seconds<1 || seconds>60)throw new IllegalArgumentException("Invalid duration");
+        validateDuration(mode,seconds);
         List<String> args=new ArrayList<>(Arrays.asList("/system/bin/app_process","/system/bin",
                 "org.nfcresearch.qpolllab.QPollWorker",mode,""+seconds,stop,lock,job,transport));
         if(uid==2000)return args;

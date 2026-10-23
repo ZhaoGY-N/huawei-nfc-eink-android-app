@@ -24,7 +24,9 @@ public final class ShellBridge extends Binder {
   if(Binder.getCallingUid()!=appUid)throw new SecurityException("Wrong caller");data.enforceInterface("org.nfcresearch.qpolllab.NfcSession");
   if(code==4){reply.writeNoException();reply.writeInt(android.os.Process.myUid());return true;}
   if(code==1){String mode=data.readString();int seconds=data.readInt();String json=data.readString();byte[] image=data.createByteArray();IBinder owner=data.readStrongBinder();
-   if(mode==null||!mode.matches("inspect|standard|qtag|identity|refresh")||seconds<1||seconds>60||json==null||json.length()>8192||image==null||image.length>105984||owner==null)throw new IllegalArgumentException("Invalid NFC session");
+   if(mode==null||!mode.matches("inspect|standard|qtag|identity|refresh|power")||json==null||json.length()>8192||image==null||image.length>105984||owner==null)throw new IllegalArgumentException("Invalid NFC session");
+   BackendPolicy.validateDuration(mode,seconds);
+   if(mode.equals("power")&&image.length!=0)throw new IllegalArgumentException("仅供能模式不接受图像数据");
    synchronized(lock){if(active)throw new IllegalStateException("另一会话尚未结束");active=true;cancelled=false;logs.setLength(0);}
    IBinder.DeathRecipient death=this::cancel;try{owner.linkToDeath(death,0);}catch(RemoteException e){active=false;throw e;}
    new Thread(()->{try{run(mode,seconds,json,image);}catch(Exception e){log("QP|ERROR|"+e);}finally{owner.unlinkToDeath(death,0);synchronized(lock){logs.append("QP|BRIDGE_END|后端会话结束\n");active=false;}}},"nfc-session").start();reply.writeNoException();return true;

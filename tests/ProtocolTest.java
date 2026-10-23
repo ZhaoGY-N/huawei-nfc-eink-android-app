@@ -14,7 +14,7 @@ public final class ProtocolTest {
     interface Action {void run()throws Exception;}
     static void rejects(Action action,String message)throws Exception{try{action.run();throw new AssertionError("Expected rejection: "+message);}catch(AssertionError e){throw e;}catch(Exception expected){}}
     static final class Fake implements PanelProtocol.Control,PanelProtocol.Transport {
-        long time,cancelAt=-1;int d3,d4,de,pin,d8,d1,failD3=-1,cancelAtD3=-1,pollMs=500,deLatencyMs;
+        long time,cancelAt=-1,firstUploadAt=-1;int d3,d4,de,pin,d8,d1,failD3=-1,cancelAtD3=-1,pollMs=500,deLatencyMs,chargeMs,powerMs=2000;
         boolean authNeeded,failPin,failD4,noBusy,foreverBusy,malformedBusy,cancel,cancelBeforeD4,cancelWhilePolling;
         byte[] info=INFO;
         ArrayList<String> events=new ArrayList<>();ArrayList<byte[]> uploads=new ArrayList<>();
@@ -28,13 +28,13 @@ public final class ProtocolTest {
                 case 0xD1:d1++;return info;
                 case 0xD8:d8++;return authNeeded&&pin==0?PanelProtocol.hex("6985"):OK;
                 case 0x20:pin++;eq(PanelProtocol.toHex(cmd).equals("00200001055265699919"),"published PIN APDU");return failPin?PanelProtocol.hex("63C2"):OK;
-                case 0xD3:d3++;uploads.add(cmd.clone());if(d3==cancelAtD3)cancel=true;return d3==failD3?PanelProtocol.hex("6995"):OK;
-                case 0xD4:d4++;eq(PanelProtocol.toHex(cmd).equals("F0D4948000"),"D4 power timing");return failD4?PanelProtocol.hex("6502"):OK;
+                case 0xD3:if(firstUploadAt<0)firstUploadAt=time;d3++;uploads.add(cmd.clone());if(d3==cancelAtD3)cancel=true;return d3==failD3?PanelProtocol.hex("6995"):OK;
+                case 0xD4:d4++;String expected=powerMs==500?"F0D4858000":powerMs==1000?"F0D48A8000":powerMs==2000?"F0D4948000":powerMs==3000?"F0D49E8000":powerMs==4000?"F0D4A88000":"F0D4B28000";eq(PanelProtocol.toHex(cmd).equals(expected),"D4 power timing");eq(events.get(events.size()-1).equals("WAIT|power|"+time+"|"+powerMs),"power timer starts immediately before D4, after upload");return failD4?PanelProtocol.hex("6502"):OK;
                 case 0xDE:deTimes.add(time);time+=deLatencyMs;de++;if(malformedBusy)return PanelProtocol.hex("029000");return PanelProtocol.hex((foreverBusy||(!noBusy&&de<=2))?"019000":"009000");
                 default:throw new AssertionError("Unexpected command: "+PanelProtocol.toHex(cmd));
             }
         }
-        void run()throws Exception{new PanelProtocol(this,this).write(new byte[PanelProtocol.IMAGE_BYTES],2000,pollMs);}
+        void run()throws Exception{new PanelProtocol(this,this).write(new byte[PanelProtocol.IMAGE_BYTES],powerMs,pollMs,chargeMs);}
         boolean emitted(String kind){for(String e:events)if(e.startsWith(kind+"|"))return true;return false;}
     }
     static void passed(String label){cases++;System.out.println("PASS "+label);}
@@ -101,6 +101,17 @@ public final class ProtocolTest {
         Fake zeroIdle=new Fake();zeroIdle.pollMs=0;zeroIdle.deLatencyMs=37;zeroIdle.noBusy=true;zeroIdle.run();eq(zeroIdle.emitted("REFRESH_UNCONFIRMED")&&!zeroIdle.emitted("REFRESH_DONE")&&zeroIdle.time>=21000,"zero wait retains 20s minimum observation");passed("zero interval never claims success from idle-only replies");
         Fake zeroStuck=new Fake();zeroStuck.pollMs=0;zeroStuck.deLatencyMs=250;zeroStuck.foreverBusy=true;rejects(zeroStuck::run,"zero interval 90s deadline");eq(zeroStuck.d4==1&&!zeroStuck.emitted("REFRESH_DONE"),"zero wait still has bounded polling");passed("zero interval retains 90s refresh deadline without replay");
         Fake zeroCancel=new Fake();zeroCancel.pollMs=0;zeroCancel.deLatencyMs=37;zeroCancel.foreverBusy=true;zeroCancel.cancelWhilePolling=true;rejects(zeroCancel::run,"zero interval cancellation");eq(zeroCancel.de==8&&zeroCancel.d4==1,"zero wait checks cancellation between exchanges");passed("zero interval remains cancellable between DE exchanges");
+        for(int charge:new int[]{0,1000,15000,30000}){
+            Fake f=new Fake();f.chargeMs=charge;f.run();
+            eq(f.firstUploadAt==charge+1000,"pre-charge is before image transfer: "+charge);
+            eq(f.d3==476&&f.d4==1&&f.emitted("REFRESH_DONE"),"charge preserves single upload and refresh");
+            eq(f.events.contains("WAIT|charging|0|"+charge)==(charge>0),"zero skips charging timer");
+            if(charge>0)eq(f.events.indexOf("WAIT_DONE|charging|"+charge)<f.events.indexOf("STAGE|checking|读取并校验屏幕规格"),"charging completes before protocol APDUs");
+        }passed("0–30s pre-charge executes before image upload and retains D4 timing");
+        for(int power:new int[]{500,1000,2000,3000,4000,5000}){Fake f=new Fake();f.powerMs=power;f.run();eq(f.events.contains("WAIT|power|1000|"+power)&&f.d3==476&&f.d4==1,"selected power parameter drives both timer and D4 command");eq(f.time==3000,"timer reporting adds no extra protocol delay");}passed("all six existing power timings drive matching post-upload timers and D4 bytes");
+        for(int charge:new int[]{-1,30001,Integer.MAX_VALUE}){Fake f=new Fake();f.chargeMs=charge;rejects(f::run,"invalid charge "+charge);eq(f.d1+f.d8+f.pin+f.d3+f.d4+f.de==0&&f.time==0,"invalid charge rejected before waiting or APDUs");}passed("pre-charge limits validated before any APDU");
+        Fake chargingCancel=new Fake();chargingCancel.chargeMs=30000;chargingCancel.cancelAt=550;
+        rejects(chargingCancel::run,"cancel while charging");eq(chargingCancel.time==600&&chargingCancel.d1+chargingCancel.d3+chargingCancel.d4==0&&!chargingCancel.emitted("WAIT_DONE"),"charging checks stop every 100ms and never proceeds after cancellation");passed("30s charging is cancellable within 100ms without writes");
         Path out=Paths.get(args[0]);Files.createDirectories(out);Random random=new Random(220);
         try(DataOutputStream fixtures=new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(out.resolve("lzo-fixtures.bin"))))){
             for(int length=1;length<=2000;length++){byte[] raw=new byte[length];random.nextBytes(raw);byte[] lzo=PanelProtocol.literalLzo(raw);fixtures.writeShort(length);fixtures.writeShort(lzo.length);fixtures.write(lzo);fixtures.write(raw);}}

@@ -13,6 +13,7 @@ import org.json.JSONObject;
 public final class PanelSession {
     public interface Events {void emit(String kind,String message);}
     public static void run(Tag tag,String mode,File jobFile,File stopFile,Events events) throws Exception {
+        if(!BackendPolicy.runsPanelProtocol(mode))throw new IllegalArgumentException("当前模式不允许屏幕协议通信");
         byte[] config=read(jobFile,8192);JSONObject job=new JSONObject(new String(config,"UTF-8"));
         byte[] image=null;
         if(mode.equals("refresh")) {
@@ -24,7 +25,9 @@ public final class PanelSession {
             if(image.length!=PanelProtocol.IMAGE_BYTES||!PanelProtocol.toHex(MessageDigest.getInstance("SHA-256").digest(image)).equalsIgnoreCase(job.getString("sha256")))
                 throw new IllegalArgumentException("预览与图片快照校验不符，未发送 APDU");
         }
-        final long deadline=SystemClock.elapsedRealtime()+(mode.equals("refresh")?180000:15000);
+        final int chargeMs=mode.equals("refresh")?job.optInt("chargeMs",0):0;
+        if(chargeMs<0||chargeMs>PanelProtocol.MAX_CHARGE_MS)throw new IllegalArgumentException("发送前充能时间必须为 0–30 秒");
+        final long deadline=SystemClock.elapsedRealtime()+(mode.equals("refresh")?180000+chargeMs:15000);
         PanelProtocol.Control control=new PanelProtocol.Control() {
             public long now(){return SystemClock.elapsedRealtime();}
             public void sleep(long ms)throws Exception{Thread.sleep(ms);}
@@ -55,7 +58,7 @@ public final class PanelSession {
                 catch(java.io.IOException e){events.emit("APDU_FAILED","INS="+ins+"；连接状态="+iso.isConnected()+"；"+e+"；不会自动重试协议操作");throw e;}
             },control);
             if(mode.equals("identity"))protocol.identify();
-            else protocol.write(image,job.getInt("powerMs"),job.optInt("pollMs",PanelProtocol.DEFAULT_POLL_MS));
+            else protocol.write(image,job.getInt("powerMs"),job.optInt("pollMs",PanelProtocol.DEFAULT_POLL_MS),chargeMs);
         } finally {try{iso.close();}catch(Exception e){events.emit("CLOSE_ERROR","关闭 ISO-DEP："+e);}}
     }
     private static byte[] read(File file,int max)throws Exception {

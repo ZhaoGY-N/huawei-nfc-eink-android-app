@@ -11,6 +11,7 @@ import java.util.Map;
 public final class PanelProtocol {
     public static final int WIDTH=552, HEIGHT=768, IMAGE_BYTES=105984;
     public static final int DEFAULT_POLL_MS=500;
+    public static final int MAX_CHARGE_MS=30000, REFRESH_TIMEOUT_MS=90000;
     public static final byte[] D1=hex("00D1000000"), D8=hex("F0D8000005000000000E"), DE=hex("F0DE000001");
     private static final byte[] PIN=hex("00200001055265699919");
     private static final byte[] GEOMETRY=hex("F0C72006000228"), SCAN=hex("00120030FFFFFF");
@@ -142,10 +143,20 @@ public final class PanelProtocol {
         control.event("IDENTITY",info.description());return info;
     }
     public boolean write(byte[] packed,int powerMs,int pollMs) throws Exception {
+        return write(packed,powerMs,pollMs,0);
+    }
+    public boolean write(byte[] packed,int powerMs,int pollMs,int chargeMs) throws Exception {
         if(packed.length!=IMAGE_BYTES)throw new IllegalArgumentException("图像必须为 105984 字节");
         if(pollMs<0||pollMs>500)throw new IllegalArgumentException("忙状态查询间隔必须为 0–500 ms");
+        if(chargeMs<0||chargeMs>MAX_CHARGE_MS)throw new IllegalArgumentException("发送前充能时间必须为 0–30 秒");
         byte[] refresh=d4(powerMs); // Validate every option before any authentication/write.
         control.event("TIMING","忙状态查询间隔="+pollMs+" ms（每次应答后等待）");
+        if(chargeMs>0){
+            control.event("STAGE","charging|发送前充能，请保持贴合");
+            control.event("WAIT","charging|"+control.now()+"|"+chargeMs);
+            pause(chargeMs);
+            control.event("WAIT_DONE","charging|"+chargeMs);
+        }
         Info initial=identify();
         packed=PanelType.forScan(packed,initial.topDown());
         control.event("SCAN","采用板内扫描方向="+(initial.topDown()?"01（从上到下）":"00（从下到上）")+"；不改写驱动配置");
@@ -175,8 +186,9 @@ public final class PanelProtocol {
         }
         control.event("STAGE","refreshing|图片已传完，正在启动屏幕刷新");
         control.check();
+        control.event("WAIT","power|"+control.now()+"|"+powerMs);
         requireOk(exchange(refresh,"D4 刷新（上电等待 "+powerMs+" ms）",8000,true),"D4");
-        long started=control.now(),deadline=started+90000;
+        long started=control.now(),deadline=started+REFRESH_TIMEOUT_MS;
         boolean busySeen=false;int idle=0;Boolean previous=null;
         control.event("STAGE","polling|保持贴合供能，等待屏幕刷新");
         while(control.now()<deadline) {
