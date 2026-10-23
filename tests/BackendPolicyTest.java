@@ -26,6 +26,22 @@ public final class BackendPolicyTest {
         check(shell.get(0).equals("/system/bin/app_process")&&shell.size()==9);
         List<String> root=BackendPolicy.workerCommand(0,"a'b $(touch SHOULD_NOT_EXIST).apk","refresh",30,"stop","lock","job","sn220");
         check(root.get(0).equals("su")&&root.get(1).equals("2000")&&root.get(3).contains("runcon u:r:shell:s0"));
+        List<String> legacy=BackendPolicy.workerCommand(0,"apk","refresh",30,"stop","lock","job","system",true);
+        check(legacy.get(0).equals("/system/bin/app_process")&&legacy.size()==10&&legacy.get(9).equals("legacy-root"));
+        check(BackendPolicy.workerUid(0,true)==0&&BackendPolicy.workerUid(0,false)==2000&&BackendPolicy.workerUid(2000,false)==2000);
+        rejected(()->BackendPolicy.workerUid(2000,true));
+        rejected(()->BackendPolicy.workerUid(10001,false));
+        rejected(()->BackendPolicy.workerCommand(2000,"apk","refresh",10,"s","l","j","system",true));
+        BackendPolicy.validateWorker(0,"u:r:su:s0",true);
+        BackendPolicy.validateWorker(2000,"u:r:shell:s0",false);
+        rejected(()->BackendPolicy.validateWorker(0,"u:r:su:s0",false));
+        rejected(()->BackendPolicy.validateWorker(2000,"u:r:su:s0",false));
+        rejected(()->BackendPolicy.validateWorker(2000,"u:r:shell:s0",true));
+        for(String mode:new String[]{"qtag","identity","refresh","power"}){
+            BackendPolicy.validate(2000,mode,"direct");BackendPolicy.validate(0,mode,"direct");
+        }
+        check(BackendPolicy.launchScript("a'b $(touch SHOULD_NOT_EXIST).apk",true).contains("ShellBridge legacy-root"));
+        check(BackendPolicy.launchScript("apk",false).contains("ShellBridge process"));
         rejected(()->BackendPolicy.workerCommand(0,"apk","qtag",0,"s","l","j","system"));
         // Exercise the actual shell parser with quotes, whitespace and command substitutions.
         String value="a'b $(touch SHOULD_NOT_EXIST)\nspace";

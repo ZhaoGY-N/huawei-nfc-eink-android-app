@@ -24,9 +24,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class QPollWorker {
     private static Object service, callback;
     private static Class<?> adapterType;
+    private static ReaderModeCompat readerMode;
     private static final Binder token = new Binder();
     private static final AtomicBoolean stopping = new AtomicBoolean();
     private static final AtomicBoolean cleaned = new AtomicBoolean();
+    private static final Object cleanupLock=new Object();
     private static final AtomicBoolean tagSeen = new AtomicBoolean();
     private static volatile boolean readerTouched, qtagTouched, readerReleased, qtagDisabled;
     private static int discoveredCode, lostCode = -1;
@@ -36,6 +38,8 @@ public final class QPollWorker {
     private static volatile boolean qDiscoverySent,qDiscoveryAccepted;
     private static String mode;
     private static boolean halDiscovery;
+    private static boolean legacyRoot,directDiscovery;
+    private static DirectQPoll directSession;
     private static boolean hookRestored=true;
     private static File hookOffAck;
     private static final Binder callbackBinder = new Binder() {
@@ -47,6 +51,7 @@ public final class QPollWorker {
             }
             if (code != discoveredCode && code != lostCode) return super.onTransact(code, data, reply, flags);
             data.enforceInterface("android.nfc.IAppCallback");
+            if(directSession!=null&&!directSession.acceptsTags()){if(reply!=null)reply.writeNoException();return true;}
             if (mode.equals("power") && code == lostCode) {
                 tagSeen.set(false);
                 emit("POWER_LOST", "标签已离场；请移动线圈并观察电压，等待系统重新寻卡");
@@ -92,18 +97,26 @@ public final class QPollWorker {
     private static void reader(int flags) throws Exception {
         Bundle extras=new Bundle();
         if(BackendPolicy.runsPanelProtocol(mode)||"power".equals(mode))extras.putInt("presence",5000);
-        invoke("setReaderMode", new Class<?>[]{IBinder.class, Class.forName("android.nfc.IAppCallback"),
-                int.class, Bundle.class, String.class}, token, callback, flags, extras, "com.android.shell");
+        try{readerMode.set(service,token,callback,flags,extras,"com.android.shell");}
+        catch(Exception e){emit("READER_CALL_FAILED","ReaderMode 调用失败（flags="+flags+"）："+e);throw e;}
+    }
+    private static void setupReaderMode()throws Exception {
+        try{
+            readerMode=ReaderModeCompat.resolve(adapterType,IBinder.class,Class.forName("android.nfc.IAppCallback"),Bundle.class);
+            emit("READER_API","使用 setReaderMode "+readerMode.parameterCount()+" 参数接口");
+        }catch(NoSuchMethodException e){emit("READER_API_MISSING",e.getMessage());throw e;}
     }
     private static int qtag(int action) throws Exception {
+        return vendor(15,112,new byte[]{0x31,(byte)action});
+    }
+    private static int vendor(int gid,int oid,byte[] payload)throws Exception {
         return (Integer) invoke("sendVendorNciMessage", new Class<?>[]{int.class,int.class,int.class,byte[].class},
-                1, 15, 112, new byte[]{0x31, (byte) action});
+                1, gid, oid, payload);
     }
     private static void init() throws Exception {
-        if (android.os.Process.myUid()!=2000) throw new SecurityException("NFC worker 必须以 UID 2000 运行；Root 后端切换身份失败，未调用 NFC");
         String domain=new String(java.nio.file.Files.readAllBytes(new File("/proc/self/attr/current").toPath()),"UTF-8").replace("\u0000","").trim();
-        if(!domain.equals("u:r:shell:s0"))throw new SecurityException("NFC worker SELinux 域不是 shell："+domain);
-        emit("WORKER_IDENTITY","UID=2000；SELinux="+domain);
+        BackendPolicy.validateWorker(android.os.Process.myUid(),domain,legacyRoot);
+        emit("WORKER_IDENTITY","UID="+android.os.Process.myUid()+"；SELinux="+domain+"；旧版Root直连="+legacyRoot);
         Object binder = Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "nfc");
         if (binder == null) throw new IllegalStateException("未找到 NFC 服务");
         adapterType = Class.forName("android.nfc.INfcAdapter");
@@ -138,7 +151,8 @@ public final class QPollWorker {
                     while ((line = in.readLine()) != null) {
                         int marker = line.indexOf("> ");
                         if (marker < 0) continue;
-                        String packet = line.substring(marker + 2).trim();
+                        String packet = line.substring(marker + 2).replaceAll("\\s+", "").toUpperCase(java.util.Locale.ROOT);
+                        if(directSession!=null)directSession.observe(line.contains("NxpNciX"),packet);
                         if(!cleaned.get()&&line.contains("NxpNciX")&&NciDiscovery.hasQPoll(packet)){qDiscoverySent=true;emit("CAPABILITY","已发出 0x71 Q-Poll 寻卡，等待控制器确认。");}
                         if(!cleaned.get()&&qDiscoverySent&&line.contains("NxpNciR")&&packet.startsWith("410301")&&packet.length()>=8){
                             if(packet.substring(6,8).equals("00")){qDiscoveryAccepted=true;emit("CAPABILITY","已确认控制器接受 Q-Poll 寻卡（0x71）；目标屏通信与刷新需单独验证。");}
@@ -151,12 +165,14 @@ public final class QPollWorker {
                         if (line.contains("NxpNciX") && packet.startsWith("2103")) emit("RF_TX", packet);
                         if (line.contains("NxpNciR") && (packet.startsWith("4103") || packet.startsWith("6103") || packet.startsWith("6105"))) emit("RF_RX", packet);
                     }
-                } catch (Exception ignored) { }
+                    if(directSession!=null)directSession.logsUnavailable("HAL 日志流已结束");
+                } catch (Exception e) {if(directSession!=null)directSession.logsUnavailable(e.toString());}
             }, "nci-monitor");
             monitor.setDaemon(true); monitor.start();
-        } catch (Exception e) { emit("LOG_UNAVAILABLE", "无法读取 HAL 日志；仍可观察标签回调：" + e); }
+        } catch (Exception e) {if(directSession!=null)directSession.logsUnavailable(e.toString());emit("LOG_UNAVAILABLE", "无法读取 HAL 日志；仍可观察标签回调：" + e); }
     }
-    private static synchronized void cleanup() {
+    private static void cleanup() {
+        synchronized(cleanupLock){
         if (!cleaned.compareAndSet(false, true)) return;
         if(halDiscovery&&readerTouched){
             emit("HOOK_RESTORE_REQUEST","先读取注入统计并关闭兼容开关，再恢复普通寻卡");
@@ -166,7 +182,7 @@ public final class QPollWorker {
             if(!hookRestored)emit("RESTORE_FAILED","未收到 Root 兼容层关闭确认，请重启 NFC");
         }
         if (readerTouched) {
-            try { reader(0); readerReleased = true; emit("READER_OFF", "ReaderMode 已释放"); }
+            try {if(directSession!=null)directSession.close();else {reader(0);emit("READER_OFF", "ReaderMode 已释放");}readerReleased = true;}
             catch (Exception e) { emit("CLEANUP_ERROR", "释放 ReaderMode 失败：" + e); }
         }
         if (qtagTouched) {
@@ -178,17 +194,21 @@ public final class QPollWorker {
         }
         SystemClock.sleep(150);
         if (logcat != null) logcat.destroy();
+        }
     }
     public static void main(String[] args) {
         int exit = 0;
         boolean sessionStarted = false;
         try {
-            if (args.length != 6)
+            if (args.length != 6 && args.length != 7)
                 throw new IllegalArgumentException("Invalid mode or argument count");
+            legacyRoot=args.length==7;
+            if(legacyRoot&&!args[6].equals("legacy-root"))throw new IllegalArgumentException("Unknown worker identity");
             mode=args[0];
             BackendPolicy.validate(android.os.Process.myUid(),mode,"system");
-            if(!args[5].equals("sn220")&&!args[5].equals("system"))throw new IllegalArgumentException("Unknown discovery backend");
+            if(!args[5].equals("sn220")&&!args[5].equals("system")&&!args[5].equals("direct"))throw new IllegalArgumentException("Unknown discovery backend");
             halDiscovery=args[5].equals("sn220")&&BackendPolicy.needsQPoll(mode);
+            directDiscovery=args[5].equals("direct")&&BackendPolicy.needsQPoll(mode);
             hookRestored=!halDiscovery;
             boolean panelOperation=BackendPolicy.runsPanelProtocol(mode);
             boolean powerOnly=mode.equals("power");
@@ -210,9 +230,15 @@ public final class QPollWorker {
                 }
                 if (stopFile.exists()) { emit("END", "已取消，未启动寻卡"); return; }
                 setupCallback();
+                setupReaderMode();
+                if(directDiscovery){
+                    adapterType.getMethod("sendVendorNciMessage",int.class,int.class,int.class,byte[].class);
+                    directSession=new DirectQPoll(QPollWorker::vendor,QPollWorker::reader,stopFile::exists,QPollWorker::emit);
+                    emit("DIRECT","手动选择直接 Q-Poll；控制器响应、标签回调与刷屏分别验证");
+                }
                 Runtime.getRuntime().addShutdownHook(new Thread(QPollWorker::cleanup));
                 startLogcat();
-                if (BackendPolicy.needsQPoll(mode)&&!halDiscovery) {
+                if (BackendPolicy.needsQPoll(mode)&&!halDiscovery&&!directDiscovery) {
                     qtagTouched = true;
                     int status = qtag(1);
                     emit("QTAG_ON", "启用 QTag，API 状态=" + status + "（只是主机状态）");
@@ -220,7 +246,7 @@ public final class QPollWorker {
                 }
                 if(halDiscovery)emit("HOOK","使用 HAL Q-Poll 兼容层，跳过系统 QTag 命令");
                 readerTouched = true;
-                reader(0x81); // NFC-A + skip NDEF; the NXP extension rewrites discovery to Q_POLL.
+                if(directSession!=null){directSession.start();qDiscoveryAccepted=true;}else reader(0x81);
                 sessionStarted = true;
                 emit("START", args[0] + ":" + seconds);
                 if(powerOnly) {
@@ -249,11 +275,11 @@ public final class QPollWorker {
                     },()->{
                         if(stopFile.exists())throw new InterruptedException("已停止重新寻卡");
                         emit("RECONNECT","尚未发送 APDU；重新寻卡以获取新标签，最多三次连接尝试");
-                        reader(0);
+                        if(directSession!=null)directSession.close();else reader(0);
                         SystemClock.sleep(200);
                         detectedTag=null;tagSeen.set(false);stopping.set(false);
                         if(stopFile.exists())throw new InterruptedException("已停止重新寻卡");
-                        reader(0x81);
+                        if(directSession!=null)directSession.start();else reader(0x81);
                         emit("START",mode+":"+scanSeconds);
                         long retryDeadline=SystemClock.elapsedRealtime()+scanSeconds*1000L;
                         while(!stopping.get()&&!stopFile.exists()&&SystemClock.elapsedRealtime()<retryDeadline)SystemClock.sleep(20);

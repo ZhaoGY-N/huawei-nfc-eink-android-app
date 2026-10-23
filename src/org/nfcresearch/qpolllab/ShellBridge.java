@@ -8,6 +8,8 @@ import org.json.JSONObject;
 /** Shizuku service with fixed operations and bounded Binder messages. */
 public final class ShellBridge extends Binder {
  private final int appUid; private final String apk;
+ private boolean legacyRoot,streamLogs;
+ private volatile int workerExit;
  private final Object lock=new Object();private final StringBuilder logs=new StringBuilder();
  private volatile boolean active,cancelled;private volatile File stop;
  public ShellBridge()throws Exception {
@@ -16,7 +18,11 @@ public final class ShellBridge extends Binder {
   ApplicationInfo info=(ApplicationInfo)Class.forName("android.content.pm.IPackageManager").getMethod("getApplicationInfo",String.class,long.class,int.class).invoke(pm,"org.nfcresearch.qpolllab",0L,0);
   if(info==null)throw new IllegalStateException("App missing");appUid=info.uid;apk=info.sourceDir;
  }
- private void log(String line){synchronized(lock){logs.append(line).append('\n');if(logs.length()>50000)logs.delete(0,logs.indexOf("\n",logs.length()-40000)+1);}}
+ private ShellBridge(String apk,boolean legacyRoot){
+  BackendPolicy.workerUid(android.os.Process.myUid(),legacyRoot);
+  this.appUid=-1;this.apk=apk;this.legacyRoot=legacyRoot;this.streamLogs=true;
+ }
+ private void log(String line){if(streamLogs){System.out.println(line);System.out.flush();return;}synchronized(lock){logs.append(line).append('\n');if(logs.length()>50000)logs.delete(0,logs.indexOf("\n",logs.length()-40000)+1);}}
  private void cancel(){cancelled=true;File file=stop;if(file!=null)try{file.createNewFile();}catch(Exception ignored){}}
  @Override protected boolean onTransact(int code,Parcel data,Parcel reply,int flags)throws RemoteException {
   if(code==16777115){cancel();new Thread(()->{long deadline=SystemClock.elapsedRealtime()+330000;while(active&&SystemClock.elapsedRealtime()<deadline)SystemClock.sleep(100);System.exit(0);},"nfc-destroy").start();return true;}
@@ -64,7 +70,7 @@ public final class ShellBridge extends Binder {
   BackendPolicy.validate(uid,mode,transport);
   // Only Q-Poll sessions may opt into the native backend. Inspection/standard A never inject.
   if(!BackendPolicy.needsQPoll(mode))transport="system";
-  log("QP|BRIDGE_STATE|Shizuku UID="+uid+"；worker UID=2000；寻卡后端="+transport);
+  log("QP|BRIDGE_STATE|启动身份 UID="+uid+"；worker UID="+BackendPolicy.workerUid(uid,legacyRoot)+"；模式="+(legacyRoot?"Root直连（旧版）":streamLogs?"Shizuku进程兼容":"Shizuku用户服务")+"；寻卡后端="+transport);
   File dir=new File("/data/local/tmp/qpoll-bridge-"+android.os.Process.myPid()+"-"+System.nanoTime());if(!dir.mkdir())throw new IOException("Cannot create session directory");
   File mark=new File(dir,"stop"),job=new File(dir,"job.json"),image=new File(dir,"image.bin");stop=mark;
   RootNfcSupport hook=null;
@@ -76,12 +82,12 @@ public final class ShellBridge extends Binder {
    try(FileOutputStream out=new FileOutputStream(image)){out.write(bytes);}try(FileOutputStream out=new FileOutputStream(job)){out.write(settings.toString().getBytes("UTF-8"));}
    if(transport.equals("sn220")){hook=new RootNfcSupport(apk,this::log);hook.prepare();}
    if(cancelled){log("QP|CANCELLED|已停止，未启动 NFC worker");return;}
-   if(uid==0){
+   if(uid==0&&!legacyRoot){
     if(!new File("/system/bin/runcon").canExecute())throw new IOException("Root 后端需要 runcon 切换到 shell SELinux 域");
     checked("chown","-R","2000:2000",dir.toString());
     checked("chcon","-R","u:object_r:shell_data_file:s0",dir.toString());
    }
-   java.util.List<String> command=BackendPolicy.workerCommand(uid,apk,mode,seconds,mark.toString(),"/data/local/tmp/qpolllab-worker.lock",job.toString(),transport);
+   java.util.List<String> command=BackendPolicy.workerCommand(uid,apk,mode,seconds,mark.toString(),"/data/local/tmp/qpolllab-worker.lock",job.toString(),transport,legacyRoot);
    ProcessBuilder builder=new ProcessBuilder(command).redirectErrorStream(true);builder.environment().put("CLASSPATH",apk);child=builder.start();final java.lang.Process running=child;
    Thread deadline=new Thread(()->{try{if(!running.waitFor(320,TimeUnit.SECONDS)){mark.createNewFile();if(!running.waitFor(10,TimeUnit.SECONDS))running.destroy();}}catch(Exception ignored){}});deadline.setDaemon(true);deadline.start();
    try(BufferedReader in=new BufferedReader(new InputStreamReader(child.getInputStream(),"UTF-8"))){String line;while((line=in.readLine())!=null){
@@ -91,7 +97,7 @@ public final class ShellBridge extends Binder {
      catch(Exception e){log("QP|RESTORE_FAILED|恢复握手失败："+e);}
     }
    }}
-   int exit=child.waitFor();if(exit!=0)log("QP|PROCESS_EXIT|"+exit);
+   workerExit=child.waitFor();if(workerExit!=0)log("QP|PROCESS_EXIT|"+workerExit);
   }finally{
    try{mark.createNewFile();if(child!=null&&!child.waitFor(10,TimeUnit.SECONDS)){
        child.destroy();if(!child.waitFor(2,TimeUnit.SECONDS))child.destroyForcibly();
@@ -100,6 +106,26 @@ public final class ShellBridge extends Binder {
     try{if(hook!=null)hook.close();}finally{stop=null;job.delete();image.delete();mark.delete();new File(dir,"hook-off-ack").delete();new File(dir,"session.lock").delete();dir.delete();}
    }
   }
+ }
+ /** Same locking, worker preparation and cleanup as UserService, with stdin ownership. */
+ public static void main(String[] args){
+  int exit=1;final java.util.concurrent.atomic.AtomicBoolean done=new java.util.concurrent.atomic.AtomicBoolean();
+  try{
+   if(args.length!=2||(!args[0].equals("process")&&!args[0].equals("legacy-root"))||!new File(args[1]).isFile())throw new IllegalArgumentException("Invalid process bridge");
+   ShellBridge bridge=new ShellBridge(args[1],args[0].equals("legacy-root"));
+   bridge.log("QP|PROCESS_READY|进程后端已启动，等待固定任务");
+   SessionWire.Job task=SessionWire.read(System.in);
+   final SessionWire.Lease owner=new SessionWire.Lease(SystemClock.elapsedRealtime());
+   Thread control=new Thread(()->{try{while(!done.get()){int value=System.in.read();owner.control(value,SystemClock.elapsedRealtime());if(value!=1)break;}}catch(IOException e){owner.control(-1,SystemClock.elapsedRealtime());}},"owner-input");
+   control.setDaemon(true);control.start();
+   Thread guard=new Thread(()->{while(!done.get()){if(owner.cancelled(SystemClock.elapsedRealtime())){bridge.cancel();break;}SystemClock.sleep(100);}},"owner-watchdog");
+   guard.setDaemon(true);guard.start();
+   if(owner.cancelled(SystemClock.elapsedRealtime()))bridge.cancel();
+   bridge.run(task.mode,task.seconds,task.json,task.image);exit=bridge.workerExit;
+  }catch(EOFException e){exit=3;System.out.println("QP|CANCELLED|任务发送前连接已关闭，未启动 NFC");}
+  catch(Throwable e){System.out.println("QP|ERROR|"+e);}
+  finally{done.set(true);System.out.println("QP|BRIDGE_END|进程后端会话结束");System.out.flush();}
+  System.exit(exit);
  }
  private static void checked(String... command)throws Exception {
   java.lang.Process process=new ProcessBuilder(command).redirectErrorStream(true).start();

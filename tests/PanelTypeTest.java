@@ -17,7 +17,7 @@ public final class PanelTypeTest {
             // Independent direct pixel-to-wire oracle: invert target row numbering.
             for(int controller=0;controller<552;controller++) {
                 int source=type==PanelType.A1?controller:(controller%2==0?controller/2:551-controller/2);
-                int x=551-source;
+                int x=551-source;if(type==PanelType.A0X)x=(x+276)%552;
                 for(int y=0;y<768;y+=4) {
                     int expected=0;for(int k=0;k<4;k++)expected|=codes[(y+k)*552+x]<<(6-2*k);
                     require((wire[controller*192+y/4]&255)==expected,"reference top-down native layout "+type);
@@ -46,7 +46,7 @@ public final class PanelTypeTest {
         }
         require(Arrays.equals(codes,original),"no input mutation");
         for(String value:new String[]{"","a0","unknown",null})try {PanelType.parse(value);throw new AssertionError("invalid choice accepted");}catch(IllegalArgumentException expected){}
-        require(PanelType.parse("A0")==PanelType.A0&&PanelType.parse("A1")==PanelType.A1,"explicit selection");
+        require(PanelType.parse("A0")==PanelType.A0&&PanelType.parse("A1")==PanelType.A1&&PanelType.parse("A0X")==PanelType.A0X,"explicit selection");
         ProtocolTest.Fake changed=new ProtocolTest.Fake();
         PanelProtocol changing=new PanelProtocol((cmd,timeout)->{
             if((cmd[1]&255)==0xD1&&changed.d1==1){changed.info=changed.info.clone();changed.info[11]=1;}
@@ -56,6 +56,6 @@ public final class PanelTypeTest {
         java.nio.file.Path fixtures=java.nio.file.Paths.get(args[0]);
         java.nio.file.Files.write(fixtures.resolve("panel-types-codes.bin"),codes);
         for(PanelType type:PanelType.values())java.nio.file.Files.write(fixtures.resolve("panel-"+type+"-scan01.bin"),PanelType.forScan(type.pack(codes),true));
-        System.out.println("PanelType tests passed: full-frame reference oracle, both variants/scans, preview, validation");
+        System.out.println("PanelType tests passed: A0/A1/A0X independent full-frame oracle, both scans, actual D3 payload, preview, validation");
     }
 }

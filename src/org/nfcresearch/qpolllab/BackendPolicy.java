@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Privilege decisions shared by the UI/service; workers always use shell UID. */
+/** Fixed privilege paths. UID 0 NFC calls require an explicit legacy selection. */
 public final class BackendPolicy {
     public static final int POWER_SECONDS = 300;
     private BackendPolicy() {}
@@ -22,18 +22,38 @@ public final class BackendPolicy {
         if(uid!=0 && uid!=2000)throw new SecurityException("请通过 Shizuku Root 或 Shell 启动后端");
         if(!Arrays.asList("inspect","standard","qtag","identity","refresh","power").contains(mode))
             throw new IllegalArgumentException("Unknown NFC mode");
-        if(!transport.equals("system") && !transport.equals("sn220"))throw new IllegalArgumentException("Unknown discovery backend");
+        if(!transport.equals("system") && !transport.equals("sn220") && !transport.equals("direct"))throw new IllegalArgumentException("Unknown discovery backend");
         if(transport.equals("sn220") && uid!=0 && needsQPoll(mode))
             throw new SecurityException("SN220 兼容层需要 Shizuku 以 Root 启动；当前是 Shell 权限");
     }
     public static String quote(String value) {return "'"+value.replace("'","'\\''")+"'";}
     public static List<String> workerCommand(int uid, String apk, String mode, int seconds,
             String stop, String lock, String job, String transport) {
+        return workerCommand(uid,apk,mode,seconds,stop,lock,job,transport,false);
+    }
+    public static int workerUid(int launcherUid, boolean legacyRoot) {
+        if(launcherUid!=0&&launcherUid!=2000)throw new SecurityException("Shell/root required");
+        if(legacyRoot&&launcherUid!=0)throw new SecurityException("旧版 Root 直连需要 UID 0");
+        return legacyRoot?0:2000;
+    }
+    public static void validateWorker(int uid, String domain, boolean legacyRoot) {
+        if(legacyRoot){if(uid!=0)throw new SecurityException("旧版 Root 模式未取得 UID 0");}
+        else if(uid!=2000||!"u:r:shell:s0".equals(domain))
+            throw new SecurityException("当前模式必须以 UID 2000 和 shell SELinux 域运行，不能回退到 Root");
+    }
+    public static String launchScript(String apk, boolean legacyRoot) {
+        return "export CLASSPATH="+quote(apk)+"; exec /system/bin/app_process /system/bin "
+                +"org.nfcresearch.qpolllab.ShellBridge "+(legacyRoot?"legacy-root":"process")+" "+quote(apk)+" 2>&1";
+    }
+    public static List<String> workerCommand(int uid, String apk, String mode, int seconds,
+            String stop, String lock, String job, String transport, boolean legacyRoot) {
         validate(uid,mode,transport);
         validateDuration(mode,seconds);
+        int workerUid=workerUid(uid,legacyRoot);
         List<String> args=new ArrayList<>(Arrays.asList("/system/bin/app_process","/system/bin",
                 "org.nfcresearch.qpolllab.QPollWorker",mode,""+seconds,stop,lock,job,transport));
-        if(uid==2000)return args;
+        if(legacyRoot)args.add("legacy-root");
+        if(uid==2000||workerUid==0)return args;
         StringBuilder script=new StringBuilder("export CLASSPATH=").append(quote(apk)).append("; exec");
         for(String arg:args)script.append(' ').append(quote(arg));
         // Both the Linux identity and SELinux domain must change. Never fall back to UID 0.

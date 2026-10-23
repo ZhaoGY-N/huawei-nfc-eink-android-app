@@ -2,15 +2,23 @@ package org.nfcresearch.qpolllab;
 
 /** Huawei JD79665AA panel variants; selection is physical, never inferred from D1. */
 public enum PanelType {
-    A0, A1;
+    A0, A1, A0X;
     public static PanelType parse(String value) {
         if("A0".equals(value))return A0;
         if("A1".equals(value))return A1;
-        throw new IllegalArgumentException("请先选择屏幕类型 A0 或 A1");
+        if("A0X".equals(value))return A0X;
+        throw new IllegalArgumentException("请先选择屏幕类型 A0、A1 或 A0X");
     }
     public byte[] pack(byte[] codes) {
-        return map(PanelProtocol.packCodes(codes,PanelProtocol.WIDTH,PanelProtocol.HEIGHT),false);
+        byte[] linear=PanelProtocol.packCodes(codes,PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
+        return map(this==A0X?swapHalves(linear):linear,false);
     }
+    private static byte[] swapHalves(byte[] linear){
+        int half=linear.length/2;byte[] out=new byte[linear.length];
+        // Linear packing stores whole 768-pixel columns. Swap before A0 interleaving.
+        System.arraycopy(linear,half,out,0,half);System.arraycopy(linear,0,out,half,half);return out;
+    }
+    private byte[] logical(byte[] packed){byte[] raw=map(packed,true);return this==A0X?swapHalves(raw):raw;}
     private byte[] map(byte[] raw,boolean inverse) {
         if(raw.length!=PanelProtocol.IMAGE_BYTES)throw new IllegalArgumentException("屏幕数据长度错误");
         if(this==A1)return raw.clone();
@@ -24,10 +32,10 @@ public enum PanelType {
         return out;
     }
     public int[] preview(byte[] packed) {
-        return ImageRaster.preview(map(packed,true),PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
+        return ImageRaster.preview(logical(packed),PanelProtocol.WIDTH,PanelProtocol.HEIGHT);
     }
     public int[] preview(byte[] packed,int[] palette) {
-        return ImageRaster.preview(map(packed,true),PanelProtocol.WIDTH,PanelProtocol.HEIGHT,palette);
+        return ImageRaster.preview(logical(packed),PanelProtocol.WIDTH,PanelProtocol.HEIGHT,palette);
     }
     /** Stored scan 00 uses bottom-up pixels; scan 01 uses top-down pixels in each row. */
     public static byte[] forScan(byte[] packed,boolean topDown) {

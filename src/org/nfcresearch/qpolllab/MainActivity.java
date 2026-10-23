@@ -19,6 +19,8 @@ import java.io.*;
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 import rikka.shizuku.Shizuku;
 import android.os.Parcel;
@@ -52,7 +54,7 @@ public final class MainActivity extends Activity {
     private String imageName="内置四色测试图";
     private volatile boolean busy,preparing,resumed,destroyed;
     private volatile File stopFile;
-    private CheckBox sn220Hook;
+    private Spinner launchMode,discoveryBackend;
     private TextView authorizationInfo;
     private int bridgeUid=-1;
     private final LinearLayout[] pageBodies=new LinearLayout[3];
@@ -64,11 +66,11 @@ public final class MainActivity extends Activity {
     private volatile android.os.IBinder bridgeBinder;
     private boolean bridgeBinding,permissionPending;
     private long bridgeBindingStarted;
-    private final Runnable bridgeTimeout=()->{if(!destroyed&&bridgeBinding){bridgeBinding=false;authorizationInfo.setText("已授权，后端连接超时，请点击重试");append("Shizuku 后端连接超过 10 秒，请重试连接。");}};
-    private final Shizuku.UserServiceArgs bridgeArgs=new Shizuku.UserServiceArgs(new android.content.ComponentName("org.nfcresearch.qpolllab","org.nfcresearch.qpolllab.ShellBridge")).tag("nfc-shell").version(28).daemon(false).processNameSuffix("nfc_shell");
+    private final Runnable bridgeTimeout=()->{if(!destroyed&&bridgeBinding){bridgeBinding=false;authorizationInfo.setText("已授权，用户服务启动超时；可选择 Shizuku 进程兼容");append("Shizuku 用户服务超过 10 秒未连接；可手动切换进程兼容，不自动重试 NFC 操作。");}};
+    private final Shizuku.UserServiceArgs bridgeArgs=new Shizuku.UserServiceArgs(new android.content.ComponentName("org.nfcresearch.qpolllab","org.nfcresearch.qpolllab.ShellBridge")).tag("nfc-shell").version(29).daemon(false).processNameSuffix("nfc_shell");
     private final android.content.ServiceConnection bridgeConnection=new android.content.ServiceConnection(){
         public void onServiceConnected(android.content.ComponentName name,android.os.IBinder binder){
-            if(destroyed)return;
+            if(destroyed||selectedLaunch()!=0)return;
             main.removeCallbacks(bridgeTimeout);
             bridgeBinding=false;
             Parcel request=Parcel.obtain(),reply=Parcel.obtain();
@@ -76,13 +78,14 @@ public final class MainActivity extends Activity {
                 String message="Shizuku "+(bridgeUid==0?"Root":"Shell")+" · UID="+bridgeUid+"；NFC 通信使用 Shell 身份";authorizationInfo.setText(message);append(message);
             }catch(Exception e){bridgeBinder=null;bridgeUid=-1;authorizationInfo.setText("连接失败，请停止并重新启动 Shizuku 后重连");append("后端身份检查失败："+e);}finally{request.recycle();reply.recycle();}
         }
-        public void onServiceDisconnected(android.content.ComponentName name){if(destroyed)return;bridgeBinding=false;bridgeBinder=null;bridgeUid=-1;authorizationInfo.setText("Shizuku 未连接");append("Shizuku 后端已断开。");if(busy)requestStop("授权服务断开");}
+        public void onServiceDisconnected(android.content.ComponentName name){if(destroyed||selectedLaunch()!=0)return;bridgeBinding=false;bridgeBinder=null;bridgeUid=-1;authorizationInfo.setText("Shizuku 未连接");append("Shizuku 后端已断开。");if(busy)requestStop("授权服务断开");}
     };
     private final Shizuku.OnBinderReceivedListener binderReceived=()->connectShizuku(false);
-    private final Shizuku.OnBinderDeadListener binderDead=()->{if(destroyed)return;bridgeBinding=false;permissionPending=false;bridgeBinder=null;bridgeUid=-1;authorizationInfo.setText("Shizuku 服务未运行，启动后自动连接");if(busy)requestStop("Shizuku 服务断开");};
+    private final Shizuku.OnBinderDeadListener binderDead=()->{if(destroyed||selectedLaunch()==2)return;bridgeBinding=false;permissionPending=false;bridgeBinder=null;bridgeUid=-1;authorizationInfo.setText("Shizuku 服务未运行，启动后自动连接");if(busy)requestStop("Shizuku 服务断开");};
     private final Shizuku.OnRequestPermissionResultListener permissionResult=(code,result)->{if(code==28&&!destroyed){permissionPending=false;if(result==android.content.pm.PackageManager.PERMISSION_GRANTED)connectShizuku(false);else{authorizationInfo.setText("未获授权，请点击 Shizuku 授权 / 连接");append("Shizuku 授权未允许，可在 Shizuku 中重新授权。");}}};
     private void connectShizuku(){connectShizuku(true);}
     private void connectShizuku(boolean requestPermission){if(destroyed)return;try{
+        if(selectedLaunch()==2){authorizationInfo.setText("Root 直连（旧版）· 执行时请求 Root 授权，无需启动 Shizuku");return;}
         if(!Shizuku.pingBinder()){authorizationInfo.setText("Shizuku 服务未运行，启动后自动连接");if(requestPermission)append("请先在 Shizuku 中启动服务，已授权后会自动连接。");return;}
         if(Shizuku.isPreV11()){authorizationInfo.setText("请升级 Shizuku");return;}
         if(Shizuku.checkSelfPermission()!=android.content.pm.PackageManager.PERMISSION_GRANTED){
@@ -90,6 +93,7 @@ public final class MainActivity extends Activity {
             if(requestPermission&&!permissionPending){permissionPending=true;Shizuku.requestPermission(28);}return;
         }
         permissionPending=false;
+        if(selectedLaunch()==1){bridgeUid=Shizuku.getUid();BackendPolicy.validate(bridgeUid,"inspect","system");authorizationInfo.setText("Shizuku 进程兼容 · "+(bridgeUid==0?"Root":"Shell")+" UID="+bridgeUid);return;}
         if(bridgeBinder!=null&&bridgeBinder.isBinderAlive())return;
         if(bridgeBinding&&SystemClock.elapsedRealtime()-bridgeBindingStarted<10000)return;
         bridgeBinding=true;bridgeBindingStarted=SystemClock.elapsedRealtime();authorizationInfo.setText("已授权，正在连接 Shizuku…");
@@ -153,12 +157,22 @@ public final class MainActivity extends Activity {
         chipInfo=text("芯片：尚未检查",15,0xff263e35);page.addView(chipInfo);
         capabilityInfo=text("Q-Poll：尚未测试",15,0xff263e35);page.addView(capabilityInfo);
         page.addView(text("芯片信息来自当前系统配置；能力以实际寻卡命令与控制器响应为准。",12,0xff68766e));
-        section(page,"Shizuku 授权");
+        section(page,"执行方式");
+        launchMode=spinner(new String[]{"Shizuku 用户服务（当前模式，默认）","Shizuku 进程兼容（用户服务无法启动时）","Root 直连（旧版，无需 Shizuku）"});
+        launchMode.setSelection(Math.max(0,Math.min(2,getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("launchMode",0))));page.addView(launchMode);
         authorizationInfo=text("Shizuku 未连接",14,0xff52635d);page.addView(authorizationInfo);
         page.addView(action("Shizuku 授权 / 连接",v->connectShizuku()));
         page.addView(text("首次点击授权并允许；以后打开应用自动连接。Shizuku 服务停止后需先重新启动服务。",12,0xff68766e));
-        sn220Hook=new CheckBox(this);sn220Hook.setText("SN220 Q-Poll 兼容（实验，需要 Shizuku Root）");idleControls.add(sn220Hook);page.addView(sn220Hook);
-        page.addView(text("仅在系统 Q-Poll 不可用、且手机使用受支持的 SN220 HAL 时尝试。会话期间临时适配 NFC 服务；不代表所有 SN220 手机受支持。",12,0xff68766e));
+        page.addView(text("当前 Root 模式由 Shizuku 准备底层、以 Shell 身份通信；旧版 Root 直连以 Root 身份调用 NFC，部分系统可能拒绝。只在空闲时手动切换，不自动重发。",12,0xff68766e));
+        launchMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){
+            if(busy)return;getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("launchMode",pos).apply();
+            main.removeCallbacks(bridgeTimeout);bridgeBinding=false;bridgeBinder=null;bridgeUid=-1;
+            try{Shizuku.unbindUserService(bridgeArgs,bridgeConnection,false);}catch(Exception ignored){}
+            connectShizuku(false);
+        }public void onNothingSelected(AdapterView<?> p){}});
+        page.addView(text("Q-Poll 寻卡方式",14,0xff263e35));
+        discoveryBackend=spinner(new String[]{"系统 QTag（默认）","SN220 HAL 兼容（实验，需 Root）","直接 Q-Poll（实验）"});page.addView(discoveryBackend);
+        page.addView(text("仅在默认寻卡失败时手动尝试。SN220 兼容需要 Root 和匹配的 HAL；直接 Q-Poll 需要可读的控制器日志。两者都不保证完整刷屏。",12,0xff68766e));
         page.addView(action("检查芯片 / NFC",v->start("inspect")));
         section(page,"NFC 仅供能 · 寻找耦合位置");
         powerSupply=button("开启 NFC 供能");
@@ -176,10 +190,10 @@ public final class MainActivity extends Activity {
         page.addView(text("读取并核对屏幕规格与原厂配置，不发送图像或启动刷新；无法自动识别 A0 / A1。",12,0xff68766e));
         page=pageBodies[1];section(page,"图像与发送");
         page.addView(text("屏幕类型",14,0xff52635d));
-        panelType=spinner(new String[]{"请选择屏幕类型","A0 · 华为 552×768 四色","A1 · 华为 552×768 四色"});
+        panelType=spinner(new String[]{"请选择屏幕类型","A0 · 华为 552×768 四色","A1 · 华为 552×768 四色","A0X · 修正 A0 左右半屏互换"});
         String savedPanel=getSharedPreferences("refresh-settings",MODE_PRIVATE).getString("panelType","");
-        panelType.setSelection(savedPanel.equals("A0")?1:savedPanel.equals("A1")?2:0);page.addView(panelType);
-        page.addView(text("按实物选择 A0 或 A1；无法自动识别。更换屏幕后请核对选择。",12,0xff68766e));
+        panelType.setSelection(savedPanel.equals("A0")?1:savedPanel.equals("A1")?2:savedPanel.equals("A0X")?3:0);page.addView(panelType);
+        page.addView(text("按实物选择；A0X 只适用于 A0 显示左右半屏互换的屏幕，不用于所有镜像或压缩问题。更换屏幕后请核对。",12,0xff68766e));
         preview=new PixelPreview(this);preview.setContentDescription("最终写入像素预览，仅黑白黄红；点击放大 · 双指缩放");page.addView(preview,new LinearLayout.LayoutParams(-1,dp(250)));
         preview.setOnClickListener(v->showPixels());
         refresh=action("发送当前预览到墨水屏",v->confirmRefresh());refresh.setTextColor(Color.WHITE);refresh.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xff176b61));page.addView(refresh);
@@ -273,7 +287,8 @@ public final class MainActivity extends Activity {
     private Button action(String s,View.OnClickListener listener){Button b=button(s);b.setOnClickListener(listener);idleControls.add(b);return b;}
     private Spinner spinner(String[] values){Spinner s=new Spinner(this);s.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,values));idleControls.add(s);return s;}
     private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+0.5f);}
-    private String selectedPanelType(){int pos=panelType.getSelectedItemPosition();return pos==1?"A0":pos==2?"A1":"";}
+    private int selectedLaunch(){return launchMode==null?0:launchMode.getSelectedItemPosition();}
+    private String selectedPanelType(){int pos=panelType.getSelectedItemPosition();return pos==1?"A0":pos==2?"A1":pos==3?"A0X":"";}
     private void controls(){
         boolean enabled=!busy&&!preparing&&!editingCrop;for(View v:idleControls)v.setEnabled(enabled);
         boolean powering=busy&&activeMode.equals("power");
@@ -336,18 +351,19 @@ public final class MainActivity extends Activity {
     }
     private void confirmRefresh(){
         if(busy||preparing||prepared==null)return;
-        if(prepared.panelType.isEmpty()){Toast.makeText(this,"请先选择屏幕类型 A0 或 A1",Toast.LENGTH_LONG).show();return;}
+        if(prepared.panelType.isEmpty()){Toast.makeText(this,"请先选择屏幕类型 A0、A1 或 A0X",Toast.LENGTH_LONG).show();return;}
         new AlertDialog.Builder(this).setTitle("将当前预览写入墨水屏？")
             .setMessage("这会替换当前贴合墨水屏的画面。\n\n目标：相同原厂配置的 552×768 四色屏（不限 UID）\n图片："+imageName+"\n"+prepared.settings+"\n上电等待："+powerTimes[power.getSelectedItemPosition()]+" ms\n忙状态查询间隔："+pollTimes[poll.getSelectedItemPosition()]+" ms\n\n仅贴放要刷新的那块屏。请贴稳，全程保持应用在前台和 NFC 供能，直到日志提示结束。中断可能留下不完整画面。")
             .setNegativeButton("返回预览",null).setPositiveButton("确认并开始刷新",(d,w)->start("refresh")).show();
     }
     private void start(final String mode){
         if(busy||preparing||editingCrop||!resumed)return;
-        try{if(!Shizuku.pingBinder()||Shizuku.checkSelfPermission()!=android.content.pm.PackageManager.PERMISSION_GRANTED||bridgeBinder==null||!bridgeBinder.isBinderAlive()){connectShizuku();return;}}catch(Exception e){append("请先连接 Shizuku："+e);return;}
-        final String transport=sn220Hook.isChecked()&&BackendPolicy.needsQPoll(mode)?"sn220":"system";
-        try{BackendPolicy.validate(bridgeUid,mode,transport);}catch(Exception e){append(e.getMessage());return;}
+        final int launch=selectedLaunch();
+        if(launch!=2)try{if(!Shizuku.pingBinder()||Shizuku.checkSelfPermission()!=android.content.pm.PackageManager.PERMISSION_GRANTED||(launch==0&&(bridgeBinder==null||!bridgeBinder.isBinderAlive()))){connectShizuku();return;}}catch(Exception e){append("请先连接 Shizuku："+e);return;}
+        final String transport=BackendPolicy.needsQPoll(mode)?new String[]{"system","sn220","direct"}[discoveryBackend.getSelectedItemPosition()]:"system";
+        try{BackendPolicy.validate(launch==2?0:launch==1?Shizuku.getUid():bridgeUid,mode,transport);}catch(Exception e){append(e.getMessage());return;}
         final int seconds=mode.equals("power")?BackendPolicy.POWER_SECONDS:durations[duration.getSelectedItemPosition()];
-        if(mode.equals("refresh")&&(prepared==null||prepared.panelType.isEmpty())){append("请先在图像与发送页选择屏幕类型 A0 或 A1。");return;}
+        if(mode.equals("refresh")&&(prepared==null||prepared.panelType.isEmpty())){append("请先在图像与发送页选择屏幕类型 A0、A1 或 A0X。");return;}
         final String id=Long.toString(SystemClock.elapsedRealtime());
         final File sessionStop=new File(getFilesDir(),"stop-"+id),jobFile=new File(getFilesDir(),"job-"+id+".json"),imageFile=new File(getFilesDir(),"image-"+id+".bin");
         try{
@@ -364,11 +380,12 @@ public final class MainActivity extends Activity {
         chargeProgress.setMax(Math.max(1,charge.getSelectedItemPosition()*1000));chargeProgress.setProgress(0);refreshProgress.setMax(powerTimes[power.getSelectedItemPosition()]);refreshProgress.setProgress(0);
         chargeTiming.setText(charge.getSelectedItemPosition()==0?"发送前充能 · 0 秒，跳过额外等待":"发送前充能 · "+charge.getSelectedItemPosition()+" 秒，等待连接屏幕");refreshTiming.setText("发送后上电等待 · "+seconds(powerTimes[power.getSelectedItemPosition()])+" 秒，等待传图完成");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        state.setText("连接 Shizuku / NFC");detail.setText(transport.equals("sn220")?"准备 SN220 兼容层":"使用系统 Q-Poll 后端");
+        state.setText(launch==2?"等待 Root / NFC":"连接 Shizuku / NFC");detail.setText(launch==2?"请允许 Root 授权；本轮使用旧版 UID 0 通信方式":transport.equals("sn220")?"准备 SN220 兼容层":transport.equals("direct")?"准备直接 Q-Poll":"使用系统 Q-Poll 后端");
         append("──────── "+mode+" · "+(mode.equals("power")?"仅供能，最长 ":"寻卡 ")+seconds+" 秒 ────────");
         new Thread(()->{try{
-            runBridge(mode,seconds,jobFile,imageFile,sessionStop);
-        }catch(Exception e){main.post(()->{if(!destroyed){state.setText("无法执行");if(mode.equals("power"))powerInfo.setText("供能执行失败，请查看日志");append("启动失败："+e);}});}
+            if(launch==0)runBridge(mode,seconds,jobFile,imageFile,sessionStop);
+            else runProcessSession(launch,mode,seconds,jobFile,imageFile,sessionStop);
+        }catch(Exception e){main.post(()->{if(!destroyed){if(!failure.present())state.setText("无法执行");if(mode.equals("power"))powerInfo.setText("供能执行失败，请查看日志");append("执行失败："+e);}});}
         finally{sessionStop.delete();jobFile.delete();imageFile.delete();main.post(()->{busy=false;scanning=false;powerDeadline=0;activeMode="";stopWait();main.removeCallbacks(tick);if(!destroyed){if(mode.equals("power")&&!terminal)powerInfo.setText("供能会话已结束，请查看日志确认恢复状态");getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);controls();}});}},"panel-session").start();
     }
     private void event(String line){
@@ -422,7 +439,50 @@ public final class MainActivity extends Activity {
             ended=true;
         }finally{if(!ended)try{cancelBridge();}catch(Exception ignored){}}
     }
-    private static byte[] readFile(File file)throws IOException {byte[] bytes=new byte[(int)file.length()];try(DataInputStream in=new DataInputStream(new FileInputStream(file))){in.readFully(bytes);}return bytes;}
+    private void runProcessSession(int launch,String mode,int seconds,File job,File image,File stop)throws Exception {
+        String script=BackendPolicy.launchScript(getApplicationInfo().sourceDir,launch==2);
+        Process child=launch==2?new ProcessBuilder("su","-c",script).redirectErrorStream(true).start():ShizukuProcess.start(script);
+        AtomicBoolean finished=new AtomicBoolean(),ended=new AtomicBoolean(),ready=new AtomicBoolean();
+        Thread errors=new Thread(()->{try(BufferedReader in=new BufferedReader(new InputStreamReader(child.getErrorStream(),"UTF-8"))){String line;while((line=in.readLine())!=null){final String value=line;main.post(()->{if(!destroyed)event(value);});}}catch(IOException ignored){}},"backend-stderr");
+        errors.setDaemon(true);errors.start();
+        Thread input=new Thread(()->{try(OutputStream out=child.getOutputStream()){
+            while(!ready.get()&&!finished.get()&&!stop.exists())SystemClock.sleep(100);
+            if(finished.get()||stop.exists())return;
+            SessionWire.write(out,new SessionWire.Job(mode,seconds,new String(readFile(job),"UTF-8"),image.exists()?readFile(image):new byte[0]));
+            long heartbeat=0;
+            while(!finished.get()){
+                if(stop.exists()){out.write(0);out.flush();return;}
+                long now=SystemClock.elapsedRealtime();if(now-heartbeat>=1000){out.write(1);out.flush();heartbeat=now;}
+                SystemClock.sleep(100);
+            }
+        }catch(Exception e){if(!finished.get())main.post(()->{if(!destroyed)append("进程控制管道结束："+e);});}},"backend-owner");
+        input.setDaemon(true);input.start();
+        Thread deadline=new Thread(()->{long end=SystemClock.elapsedRealtime()+335000,cancelAt=0;
+            while(!finished.get()){
+                long now=SystemClock.elapsedRealtime();
+                if(stop.exists()||now>=end){
+                    if(!ready.get()){child.destroy();return;}
+                    if(cancelAt==0){cancelAt=now;try{child.getOutputStream().close();}catch(IOException ignored){}}
+                    if(now-cancelAt>=35000){child.destroy();main.post(()->{if(!destroyed)event("QP|RESTORE_FAILED|进程停止超时，请关闭再开启 NFC");});return;}
+                }
+                SystemClock.sleep(100);
+            }
+        },"backend-deadline");deadline.setDaemon(true);deadline.start();
+        try(BufferedReader in=new BufferedReader(new InputStreamReader(child.getInputStream(),"UTF-8"))){
+            String line;while((line=in.readLine())!=null){if(line.startsWith("QP|PROCESS_READY|"))ready.set(true);if(line.startsWith("QP|BRIDGE_END|"))ended.set(true);final String value=line;main.post(()->{if(!destroyed)event(value);});}
+            int exit=child.waitFor();
+            if(!ended.get()){
+                if(!ready.get()&&stop.exists())main.post(()->{if(!destroyed)event("QP|CANCELLED|已停止，未启动 NFC 后端");});
+                else if(ready.get())main.post(()->{if(!destroyed)event("QP|RESTORE_FAILED|进程异常结束，NFC 恢复未确认，请关闭再开启 NFC");});
+                else throw new IOException("进程未启动，退出码="+exit+"；请检查 Root/Shizuku 授权");
+            }else if(exit!=0&&!stop.exists())main.post(()->{if(!destroyed)event("QP|PROCESS_EXIT|"+exit);});
+        }finally{
+            finished.set(true);try{child.getOutputStream().close();}catch(IOException ignored){}
+            if(!child.waitFor(35,TimeUnit.SECONDS))child.destroy();
+            try{child.getInputStream().close();}catch(IOException ignored){}try{child.getErrorStream().close();}catch(IOException ignored){}
+        }
+    }
+    private static byte[] readFile(File file)throws IOException {if(file.length()>SessionWire.MAX_IMAGE)throw new IOException("任务文件超出限制");byte[] bytes=new byte[(int)file.length()];try(DataInputStream in=new DataInputStream(new FileInputStream(file))){in.readFully(bytes);}return bytes;}
     private void cancelBridge()throws Exception {android.os.IBinder binder=bridgeBinder;if(binder==null)return;Parcel request=Parcel.obtain(),reply=Parcel.obtain();try{request.writeInterfaceToken("org.nfcresearch.qpolllab.NfcSession");binder.transact(3,request,reply,0);reply.readException();}finally{request.recycle();reply.recycle();}}
     private void requestStop(String reason){if(!busy)return;try{if(stopFile!=null)stopFile.createNewFile();boolean powering=activeMode.equals("power");append(reason+(powering?"；正在关闭供能并恢复 NFC。":"；等当前通信返回后恢复 NFC，不重发写入。"));stop.setEnabled(false);if(powering){powerDeadline=0;main.removeCallbacks(tick);powerSupply.setEnabled(false);powerSupply.setText("正在关闭供能…");powerInfo.setText("正在关闭供能并恢复 NFC…");}}catch(Exception e){append("停止标记失败："+e);}}
     private void showLicense(){
