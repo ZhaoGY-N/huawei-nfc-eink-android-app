@@ -175,12 +175,26 @@ public final class PanelProtocol {
         }
         control.event("STAGE","refreshing|图片已传完，正在启动屏幕刷新");
         control.check();
-        requireOk(exchange(refresh,"D4 刷新（上电等待 "+powerMs+" ms）",8000,true),"D4");
+        // The panel holds its power-up phase before answering D4, so the reply arrives roughly
+        // powerMs later. A fixed timeout would abandon longer power settings before they answer.
+        requireOk(exchange(refresh,"D4 刷新（上电等待 "+powerMs+" ms）",Math.max(8000,powerMs+6000),true),"D4");
         long started=control.now(),deadline=started+90000;
         boolean busySeen=false;int idle=0;Boolean previous=null;
         control.event("STAGE","polling|保持贴合供能，等待屏幕刷新");
         while(control.now()<deadline) {
-            byte[] data=requireOk(exchange(DE,"DE 状态查询",5000,true),"DE");
+            byte[] raw=exchange(DE,"DE 状态查询",5000,false);
+            int deStatus=status(raw);
+            if(deStatus==0x6502||deStatus==0x68CA||deStatus==0x698A) {
+                // A full four-colour refresh needs roughly 30 s of continuous field power; this status
+                // means the panel ran out mid-refresh, so the image is very likely half written.
+                String code=String.format("%04X",deStatus);
+                control.event("SUPPLY","刷新进行中屏报告供电不足（SW="+code+"）；画面很可能停在半途，本次不重发 D4");
+                throw new IllegalStateException("刷新中途供电不足（SW="+code+"）：屏在第 "
+                        +((control.now()-started)/1000)+" 秒失去足够供能，画面可能只刷了一部分。"
+                        +"请把屏幕移开约 10 秒后重新贴合、避开手机壳/磁吸/金属，"
+                        +"并可在高级参数里把上电等待调到 5000 ms 以上再重刷；本次未自动重发 D4。");
+            }
+            byte[] data=requireOk(raw,"DE");
             if(data.length!=1||(data[0]!=0&&data[0]!=1))throw new IllegalArgumentException("DE 没有有效忙状态字节");
             boolean busy=data[0]==1;busySeen|=busy;idle=busy?0:idle+1;
             if(previous==null||previous!=busy){control.event("BUSY",busy?"屏幕报告忙，继续供能":"屏幕报告空闲");previous=busy;}
