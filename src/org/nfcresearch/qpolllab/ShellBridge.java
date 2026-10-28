@@ -7,7 +7,7 @@ import org.json.JSONObject;
 
 /** Shizuku service with fixed operations and bounded Binder messages. */
 public final class ShellBridge extends Binder {
- private final int appUid; private final String apk;
+ private final int appUid; private String apk;
  private boolean legacyRoot,streamLogs;
  private volatile int workerExit;
  private final Object lock=new Object();private final StringBuilder logs=new StringBuilder();
@@ -65,6 +65,9 @@ public final class ShellBridge extends Binder {
   }
  }
  private void runLocked(String mode,int seconds,String json,byte[] bytes)throws Exception {
+  String current=InstalledApp.sessionPath(apk,appUid);
+  if(!current.equals(apk))log("QP|APK_REFRESH|安装包路径已变化，已刷新驻留服务的 APK 路径");
+  apk=current;log("QP|APK_SOURCE|本轮 worker 使用当前 APK："+apk);
   final int uid=android.os.Process.myUid();
   JSONObject settings=new JSONObject(json);String transport=settings.optString("discoveryBackend","system");
   BackendPolicy.validate(uid,mode,transport);

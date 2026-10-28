@@ -16,6 +16,14 @@ public final class SessionFailureTest {
         require(f.message().startsWith("系统拒绝 QTag，响应状态=05")&&f.message().contains("退出码=1"));
         f.clear();f.accept("PROCESS_EXIT","137");
         require(f.message().contains("未收到具体错误")&&f.message().contains("137"));
+        f.clear();f.accept("ERROR","屏幕操作失败");
+        f.accept("ERROR","IOException: D1 失败，SW=6401");
+        f.accept("ERROR","IOException: D1 失败，SW=6401");
+        f.accept("ERROR","刷新查询失败，SW=68CA");
+        f.accept("PROCESS_EXIT","1");f.accept("RESTORE_FAILED","NFC 恢复未确认");
+        String complete=f.message();
+        require(complete.contains("屏幕操作失败")&&complete.contains("SW=6401")&&complete.contains("SW=68CA")&&complete.contains("退出码=1")&&complete.contains("恢复未确认"));
+        require(complete.indexOf("SW=6401")==complete.lastIndexOf("SW=6401"));
         System.out.println("SessionFailure regression tests passed");
     }
 }

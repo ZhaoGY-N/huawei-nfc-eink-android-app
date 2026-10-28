@@ -14,6 +14,7 @@ public final class BackendPolicy {
     public static boolean runsPanelProtocol(String mode) {
         return mode.equals("identity") || mode.equals("refresh");
     }
+    public static boolean requiresRoot(String transport){return transport.equals("sn220");}
     public static void validateDuration(String mode, int seconds) {
         if(seconds<1 || seconds>(mode.equals("power")?POWER_SECONDS:60))
             throw new IllegalArgumentException("时长超出当前模式允许范围");
@@ -23,8 +24,8 @@ public final class BackendPolicy {
         if(!Arrays.asList("inspect","standard","qtag","identity","refresh","power").contains(mode))
             throw new IllegalArgumentException("Unknown NFC mode");
         if(!transport.equals("system") && !transport.equals("sn220") && !transport.equals("direct"))throw new IllegalArgumentException("Unknown discovery backend");
-        if(transport.equals("sn220") && uid!=0 && needsQPoll(mode))
-            throw new SecurityException("SN220 兼容层需要 Shizuku 以 Root 启动；当前是 Shell 权限");
+        if(requiresRoot(transport) && uid!=0 && needsQPoll(mode))
+            throw new SecurityException("NXP HAL 兼容层需要 Root（Shizuku Root 或 Root 直连）；当前是 Shell 权限");
     }
     public static String quote(String value) {return "'"+value.replace("'","'\\''")+"'";}
     public static List<String> workerCommand(int uid, String apk, String mode, int seconds,

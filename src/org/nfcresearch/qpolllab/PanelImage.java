@@ -60,6 +60,10 @@ public final class PanelImage {
         p.setTextSize(28);c.drawText("552 × 768",44,640,p);c.drawText("顶部 ↑    黑 白 黄 红",44,690,p);
         return b;
     }
+    public static Bitmap solidPattern(int code) {
+        if(code<0||code>=PALETTE.length)throw new IllegalArgumentException("无效的纯色");
+        Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);bitmap.eraseColor(PALETTE[code]);return bitmap;
+    }
     public static Bitmap tonePattern() {
         Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);
         Canvas canvas=new Canvas(bitmap);canvas.drawColor(Color.WHITE);
@@ -116,11 +120,15 @@ public final class PanelImage {
         return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,chart,ImageAdjustments.NONE);
     }
     public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,boolean chart,ImageAdjustments adjustments) {
-        if(chart){
-            byte[] codes=CalibrationPalette.chart(552,768);PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
+        return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,chart?TestImageMode.CALIBRATION:TestImageMode.NONE,adjustments);
+    }
+    public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,TestImageMode mode,ImageAdjustments adjustments) {
+        calibrated=mode.calibrationPalette(calibrated);
+        if(mode.fixedRaster()){
+            byte[] codes=mode.fixedCodes(552,768);PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
             byte[] packed=type.pack(codes);
             return new Prepared(Bitmap.createBitmap(type.preview(packed),552,768,Bitmap.Config.ARGB_8888),packed,
-                "校色基准图 · 左上黑 / 右上白 / 左下黄 / 右下红 · 固定四色编码，绕过所有图片调整",panelType);
+                (mode==TestImageMode.CALIBRATION?"校色基准图 · 左上黑 / 右上白 / 左下黄 / 右下红":"纯色测试图")+" · 固定四色编码，不使用校色数据，绕过所有图片调整",panelType);
         }
         if(block>1)dither=false;
         Bitmap input=rotated(source,rotation);
@@ -141,6 +149,7 @@ public final class PanelImage {
         String settings="屏幕："+(panelType.isEmpty()?"尚未选择":panelType)+" · "+(binary?"黑白二值化 · 阈值 "+threshold:"黑白黄红四色")+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭")+" · "+(cropped?"已手动裁切 · ":"")+"旋转 "+rotation+"° · "+(cover?"填满":"留白");
         settings+=calibrated==null?" · 校色：关闭":" · 校色：开启（近似实物色；黑白模式仍按阈值）";
         settings+=" · "+adjustments.description();
+        if(mode!=TestImageMode.NONE)settings+=" · 测试图不使用校色数据";
         return new Prepared(image,packed,settings,panelType);
     }
 }

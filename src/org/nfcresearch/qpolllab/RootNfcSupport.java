@@ -14,19 +14,20 @@ final class RootNfcSupport implements AutoCloseable {
     private static final File ENABLE=new File(DIRECTORY,"enable");
     private final String apk;
     private final Log log;
-    private boolean ownsLease,installed,leaseDisabled;
+    private boolean ownsLease,installed;
+    private volatile boolean leaseDisabled;
     private File injector,library;
     RootNfcSupport(String apk,Log log){this.apk=apk;this.log=log;}
     static void clearStaleLease()throws IOException {
         if(!ENABLE.exists())return;
-        if(android.os.Process.myUid()!=0)throw new IOException("检测到上次 Root 兼容层会话开关，请以 Shizuku Root 重连后清理");
+        if(android.os.Process.myUid()!=0)throw new IOException("检测到上次 Root 兼容层会话开关，请通过 Shizuku Root 或 Root 直连重新执行清理");
         if(!ENABLE.delete())throw new IOException("无法清理上次 HAL 会话开关，请重启 NFC");
     }
     void prepare()throws Exception {
-        if(android.os.Process.myUid()!=0)throw new SecurityException("HAL 兼容层需要 Shizuku Root");
+        if(android.os.Process.myUid()!=0)throw new SecurityException("HAL 兼容层需要 Root（Shizuku Root 或 Root 直连）");
         boolean arm64=false;for(String abi:android.os.Build.SUPPORTED_ABIS)arm64|=abi.equals("arm64-v8a");
-        if(!arm64||!ChipInfo.inspect().contains("NXP SN220"))
-            throw new IOException("兼容层仅支持 arm64 SN220 固件配置；当前设备不匹配");
+        if(!arm64||!NxpHalPolicy.supported(ChipInfo.inspect()))
+            throw new IOException("兼容层仅支持 arm64 SN220 / SN100U 固件配置；当前设备不匹配");
         if(!DIRECTORY.getCanonicalFile().equals(DIRECTORY))throw new IOException("HAL directory must not be a symlink");
         if(!DIRECTORY.isDirectory()&&!DIRECTORY.mkdir())throw new IOException("无法建立 HAL 兼容层目录");
         run("chown","0:0",DIRECTORY.toString());run("chmod","755",DIRECTORY.toString());
@@ -40,7 +41,7 @@ final class RootNfcSupport implements AutoCloseable {
         // The helper returns success only after both GOT slots were installed and verified.
         try(FileOutputStream output=new FileOutputStream(ENABLE)){output.write(1);}
         run("chmod","644",ENABLE.toString());run("chcon","u:object_r:vendor_file:s0",ENABLE.toString());
-        log.line("QP|HOOK|SN220 HAL 双向兼容层已确认安装；本会话启用，最长 360 秒");
+        log.line("QP|HOOK|NXP SN220 / SN100U HAL 双向兼容层已确认安装；本会话启用，最长 360 秒");
         snapshot("before-worker");
     }
     private void snapshot(String phase) {
@@ -53,6 +54,9 @@ final class RootNfcSupport implements AutoCloseable {
         if(!ownsLease||leaseDisabled)return;
         try{snapshot("before-reader-restore");}finally{disableLease();}
     }
+    // Foreground ReaderMode is suspended by Android on pause. Disable rewriting first,
+    // without waiting for the external statistics process; leave statistics to the owner thread.
+    synchronized void disableForForeground()throws IOException {if(ownsLease)disableLease();}
     private void disableLease()throws IOException {
         if(ENABLE.exists()&&!ENABLE.delete()){
             log.line("QP|RESTORE_FAILED|无法关闭 HAL 兼容开关，请重启 NFC");throw new IOException("HAL lease cleanup failed");

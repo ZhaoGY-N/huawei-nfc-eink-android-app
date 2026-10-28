@@ -35,7 +35,7 @@ public final class CalibrationUi {
     public CalibrationUi(Activity activity,Host host){this.activity=activity;this.host=host;prefs=activity.getSharedPreferences("refresh-settings",Activity.MODE_PRIVATE);}
     private int dp(int n){return Math.round(n*activity.getResources().getDisplayMetrics().density);}
     private TextView label(String value){TextView t=new TextView(activity);t.setText(value);t.setTextSize(13);t.setTextColor(0xff52635d);t.setPadding(0,dp(5),0,dp(5));return t;}
-    private Button button(String value,View.OnClickListener listener){Button b=new Button(activity);b.setText(value);b.setAllCaps(false);b.setTextSize(14);b.setMinHeight(dp(48));b.setOnClickListener(listener);return b;}
+    private Button button(String value,View.OnClickListener listener){Button b=AppUi.button(activity,value);b.setOnClickListener(listener);return b;}
     private void action(LinearLayout page,String name,View.OnClickListener listener){Button b=button(name,listener);controls.add(b);page.addView(b);}
     private static String hex(int color){return String.format(Locale.ROOT,"#%06X",color&0xffffff);}
     private void swatch(TextView view,String title,int color){view.setText(title+"  "+hex(color));if(view instanceof Button)view.setBackgroundTintList(android.content.res.ColorStateList.valueOf(color));else view.setBackgroundColor(color);view.setTextColor(CalibrationPalette.luminance(color)>0.35?Color.BLACK:Color.WHITE);}
@@ -45,7 +45,7 @@ public final class CalibrationUi {
         enabled=new CheckBox(activity);enabled.setText("启用校色色板（A0 / A1 共用）");controls.add(enabled);page.addView(enabled);
         enabled.setOnCheckedChangeListener((v,checked)->{if(updating)return;prefs.edit().putBoolean(KEY+"enabled",checked).apply();render();host.calibrationChanged();});
         action(page,"1. 显示校色测试图",v->host.showCalibrationChart());
-        page.addView(label("测试图左上黑、右上白、左下黄、右下红。到图像与发送页确认并发送，等待实物刷新完成。测试图绕过校色、二值化、抖动和裁切。"));
+        page.addView(label("测试图左上黑、右上白、左下黄、右下红。在发送页确认并发送，等待实物刷新完成；可点击“退出校色测试 · 恢复编辑”回到原图片。测试图绕过校色、二值化、抖动和裁切。"));
         action(page,"2. 从相册选择屏幕照片",v->openPhoto());
         page.addView(label("先自行拍摄屏幕，再从相册选入。在照片上分别点选四色块中心并确认取样，避开边缘、阴影和反光。照片仅在本机处理；取样不会替换当前编辑图片。"));
         page.addView(label("3. 手动微调（点击颜色，可调 RGB 或输入十六进制）"));
@@ -140,7 +140,7 @@ public final class CalibrationUi {
         TextView status=label("");content.addView(status);
         LinearLayout swatches=new LinearLayout(activity);TextView[] samples=new TextView[4];
         for(int i=0;i<4;i++){samples[i]=label(NAMES[i]+"：未取");samples[i].setTextSize(10);samples[i].setGravity(android.view.Gravity.CENTER);swatches.addView(samples[i],new LinearLayout.LayoutParams(0,dp(48),1));}content.addView(swatches);
-        LinearLayout actions=new LinearLayout(activity);Button cancel=button("取消",v->dialog.dismiss()),apply=button("保存并启用校色",null);apply.setEnabled(false);actions.addView(cancel,new LinearLayout.LayoutParams(0,-2,1));actions.addView(apply,new LinearLayout.LayoutParams(0,-2,1));content.addView(actions);
+        LinearLayout actions=new LinearLayout(activity);Button cancel=button("取消",v->dialog.dismiss()),apply=button("保存并启用校色",null);apply.setEnabled(false);actions.addView(cancel,AppUi.params(activity,0,-2,1));actions.addView(apply,AppUi.params(activity,0,-2,1));content.addView(actions);
         selected.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> p){}public void onItemSelected(AdapterView<?> p,View v,int pos,long id){hasSample[0]=false;confirm.setEnabled(false);candidate.setBackgroundColor(Color.TRANSPARENT);candidate.setTextColor(0xff52635d);candidate.setText("点选"+NAMES[pos]+"色色块中心");}});
         confirm.setOnClickListener(v->{if(!hasSample[0])return;int code=selected.getSelectedItemPosition();draft[code]=sample[0];taken[code]=true;swatch(samples[code],NAMES[code],draft[code]);int count=0,next=-1;for(int i=0;i<4;i++){if(taken[i])count++;else if(next<0)next=i;}status.setText("已确认 "+count+" / 4 色");apply.setEnabled(count==4);if(next>=0)selected.setSelection(next);});
         apply.setOnClickListener(v->{try{save(draft);dialog.dismiss();}catch(IllegalArgumentException e){status.setText(e.getMessage());}});

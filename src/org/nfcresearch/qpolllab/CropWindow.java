@@ -14,6 +14,11 @@ public final class CropWindow {
         centerX=saved.centerX;centerY=saved.centerY;zoom=saved.zoom;
     }
     public void reset(){zoom=1;centerX=imageWidth/2;centerY=imageHeight/2;}
+    public static CropWindow restore(int width,int height,double left,double top,double cropWidth){
+        CropWindow result=new CropWindow(width,height);double cropHeight=cropWidth*768/552;
+        if(!Double.isFinite(left)||!Double.isFinite(top)||!Double.isFinite(cropWidth)||cropWidth<=0||left<0||top<0||left+cropWidth>width+0.001||top+cropHeight>height+0.001||result.baseWidth/cropWidth>8.001||cropWidth>result.baseWidth+0.001)throw new IllegalArgumentException("裁切草稿无效");
+        result.zoom=result.baseWidth/cropWidth;result.centerX=left+cropWidth/2;result.centerY=top+cropHeight/2;result.clamp();return result;
+    }
     public double width(){return baseWidth/zoom;}
     public double height(){return baseHeight/zoom;}
     public double left(){return centerX-width()/2;}

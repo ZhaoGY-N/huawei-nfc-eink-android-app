@@ -13,6 +13,9 @@ import org.json.JSONObject;
 public final class PanelSession {
     public interface Events {void emit(String kind,String message);}
     public static void run(Tag tag,String mode,File jobFile,File stopFile,Events events) throws Exception {
+        run(tag,mode,jobFile,stopFile,events,iso->{});
+    }
+    static void run(Tag tag,String mode,File jobFile,File stopFile,Events events,java.util.function.Consumer<IsoDep> connection) throws Exception {
         if(!BackendPolicy.runsPanelProtocol(mode))throw new IllegalArgumentException("当前模式不允许屏幕协议通信");
         byte[] config=read(jobFile,8192);JSONObject job=new JSONObject(new String(config,"UTF-8"));
         byte[] image=null;
@@ -40,6 +43,8 @@ public final class PanelSession {
         control.check();IsoDep iso=IsoDep.get(tag);
         if(iso==null)throw new IllegalArgumentException("目标未提供 ISO-DEP，未发送 APDU");
         try {
+            connection.accept(iso);
+            control.check();
             long started=SystemClock.elapsedRealtime();
             events.emit("STAGE","connecting|正在建立 ISO-DEP 连接");
             events.emit("ISO_DEP","历史字节="+PanelProtocol.toHex(iso.getHistoricalBytes()==null?new byte[0]:iso.getHistoricalBytes())+"；高层响应="+PanelProtocol.toHex(iso.getHiLayerResponse()==null?new byte[0]:iso.getHiLayerResponse()));
@@ -59,7 +64,7 @@ public final class PanelSession {
             },control);
             if(mode.equals("identity"))protocol.identify();
             else protocol.write(image,job.getInt("powerMs"),job.optInt("pollMs",PanelProtocol.DEFAULT_POLL_MS),chargeMs);
-        } finally {try{iso.close();}catch(Exception e){events.emit("CLOSE_ERROR","关闭 ISO-DEP："+e);}}
+        } finally {try{iso.close();}catch(Exception e){events.emit("CLOSE_ERROR","关闭 ISO-DEP："+e);}finally{connection.accept(null);}}
     }
     private static byte[] read(File file,int max)throws Exception {
         try(FileInputStream input=new FileInputStream(file);ByteArrayOutputStream out=new ByteArrayOutputStream()) {

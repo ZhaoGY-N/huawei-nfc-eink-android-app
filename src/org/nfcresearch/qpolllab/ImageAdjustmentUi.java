@@ -34,9 +34,9 @@ public final class ImageAdjustmentUi {
             });
         }
         page.addView(label("松手更新预览；色温向左偏冷、向右偏暖。调整同时作用于预览和发送图片，原图与校色色板保留。"));
-        Button reset=new Button(activity);reset.setText("还原亮度 / 色温 / 对比度");reset.setAllCaps(false);reset.setTextSize(14);reset.setOnClickListener(v->{handler.removeCallbacks(apply);for(SeekBar bar:sliders)bar.setProgress(100);apply.run();});controls.add(reset);page.addView(reset);
+        Button reset=AppUi.button(activity,"还原亮度 / 色温 / 对比度");reset.setOnClickListener(v->{handler.removeCallbacks(apply);for(SeekBar bar:sliders)bar.setProgress(100);apply.run();});controls.add(reset);page.addView(reset);
     }
-    private void updateLabel(int index){int value=sliders[index].getProgress()-100;labels[index].setText(NAMES[index]+"："+(value>0?"+":"")+value+(index==1?"（冷 ← 0 → 暖）":""));}
+    private void updateLabel(int index){int value=sliders[index].getProgress()-100;String label=NAMES[index]+"："+(value>0?"+":"")+value+(index==1?"（冷 ← 0 → 暖）":"");labels[index].setText(label);sliders[index].setContentDescription(label);}
     public ImageAdjustments snapshot(){return new ImageAdjustments(sliders[0].getProgress()-100,sliders[1].getProgress()-100,sliders[2].getProgress()-100);}
     public void setEditable(boolean value){editable=value;if(!value)handler.removeCallbacks(apply);for(View v:controls)v.setEnabled(value);}
     public void destroy(){handler.removeCallbacks(apply);}
