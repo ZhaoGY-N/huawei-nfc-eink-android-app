@@ -25,8 +25,15 @@ final class RootNfcSupport implements AutoCloseable {
     void prepare()throws Exception {
         if(android.os.Process.myUid()!=0)throw new SecurityException("HAL 兼容层需要 Shizuku Root");
         boolean arm64=false;for(String abi:android.os.Build.SUPPORTED_ABIS)arm64|=abi.equals("arm64-v8a");
-        if(!arm64||!ChipInfo.inspect().contains("NXP SN220"))
-            throw new IOException("兼容层仅支持 arm64 SN220 固件配置；当前设备不匹配");
+        if(!arm64)throw new IOException("兼容层需要 arm64；当前设备不匹配");
+        // The injector is the real gate: it installs only when a HAL module matches the nfc_nci
+        // name family and both write symbols plus their GOT slots validate, so any NXP chip whose
+        // firmware follows that layout may qualify - not just SN220 (SN100U verified on another
+        // device). An unrecognised firmware configuration stops before injection as before.
+        String chip=ChipInfo.inspect().split("\n")[0].trim();
+        if(!chip.startsWith("NXP "))
+            throw new IOException("未能从固件配置识别 NXP 芯片，未执行注入；可先运行检查 NFC 查看配置证据");
+        log.line("QP|HOOK_CHIP|"+chip);
         if(!DIRECTORY.getCanonicalFile().equals(DIRECTORY))throw new IOException("HAL directory must not be a symlink");
         if(!DIRECTORY.isDirectory()&&!DIRECTORY.mkdir())throw new IOException("无法建立 HAL 兼容层目录");
         run("chown","0:0",DIRECTORY.toString());run("chmod","755",DIRECTORY.toString());
@@ -40,7 +47,7 @@ final class RootNfcSupport implements AutoCloseable {
         // The helper returns success only after both GOT slots were installed and verified.
         try(FileOutputStream output=new FileOutputStream(ENABLE)){output.write(1);}
         run("chmod","644",ENABLE.toString());run("chcon","u:object_r:vendor_file:s0",ENABLE.toString());
-        log.line("QP|HOOK|SN220 HAL 双向兼容层已确认安装；本会话启用，最长 360 秒");
+        log.line("QP|HOOK|"+chip+" HAL 双向兼容层已确认安装；本会话启用，最长 360 秒");
         snapshot("before-worker");
     }
     private void snapshot(String phase) {
