@@ -16,7 +16,7 @@ public final class BackendPolicy {
             throw new IllegalArgumentException("Unknown NFC mode");
         if(!transport.equals("system") && !transport.equals("sn220") && !transport.equals("direct"))throw new IllegalArgumentException("Unknown discovery backend");
         if(transport.equals("sn220") && uid!=0 && needsQPoll(mode))
-            throw new SecurityException("SN220 兼容层需要 Shizuku 以 Root 启动；当前是 Shell 权限");
+            throw new SecurityException("HAL 兼容层需要 Shizuku 以 Root 启动；当前是 Shell 权限");
     }
     public static String quote(String value) {return "'"+value.replace("'","'\\''")+"'";}
     public static List<String> workerCommand(int uid, String apk, String mode, int seconds,

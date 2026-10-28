@@ -14,7 +14,7 @@ public final class ProtocolTest {
     interface Action {void run()throws Exception;}
     static void rejects(Action action,String message)throws Exception{try{action.run();throw new AssertionError("Expected rejection: "+message);}catch(AssertionError e){throw e;}catch(Exception expected){}}
     static final class Fake implements PanelProtocol.Control,PanelProtocol.Transport {
-        long time,cancelAt=-1;int d3,d4,de,pin,d8,d1,failD3=-1,cancelAtD3=-1,pollMs=500,deLatencyMs;
+        long time,cancelAt=-1;int d3,d4,de,pin,d8,d1,failD3=-1,cancelAtD3=-1,pollMs=500,deLatencyMs,deSupplyAt=-1;
         boolean authNeeded,failPin,failD4,noBusy,foreverBusy,malformedBusy,cancel,cancelBeforeD4,cancelWhilePolling;
         byte[] info=INFO;
         ArrayList<String> events=new ArrayList<>();ArrayList<byte[]> uploads=new ArrayList<>();
@@ -30,7 +30,7 @@ public final class ProtocolTest {
                 case 0x20:pin++;eq(PanelProtocol.toHex(cmd).equals("00200001055265699919"),"published PIN APDU");return failPin?PanelProtocol.hex("63C2"):OK;
                 case 0xD3:d3++;uploads.add(cmd.clone());if(d3==cancelAtD3)cancel=true;return d3==failD3?PanelProtocol.hex("6995"):OK;
                 case 0xD4:d4++;eq(PanelProtocol.toHex(cmd).equals("F0D4948000"),"D4 power timing");return failD4?PanelProtocol.hex("6502"):OK;
-                case 0xDE:deTimes.add(time);time+=deLatencyMs;de++;if(malformedBusy)return PanelProtocol.hex("029000");return PanelProtocol.hex((foreverBusy||(!noBusy&&de<=2))?"019000":"009000");
+                case 0xDE:deTimes.add(time);time+=deLatencyMs;de++;if(deSupplyAt>0&&de>=deSupplyAt)return PanelProtocol.hex(deSupplyAt==6?"68CA":"6502");if(malformedBusy)return PanelProtocol.hex("029000");return PanelProtocol.hex((foreverBusy||(!noBusy&&de<=2))?"019000":"009000");
                 default:throw new AssertionError("Unexpected command: "+PanelProtocol.toHex(cmd));
             }
         }
@@ -95,6 +95,8 @@ public final class ProtocolTest {
         Fake before=new Fake();before.cancelBeforeD4=true;rejects(before::run,"cancel before D4");eq(before.d3==476&&before.d4==0,"cancelled before trigger");passed("cancellation during upload and before D4");
         Fake invalid=new Fake();rejects(()->new PanelProtocol(invalid,invalid).write(new byte[105984],0,500),"invalid option");eq(invalid.d1==0,"options checked before APDUs");passed("invalid timing stops before any APDU");
         for(int interval:new int[]{0,10,20,50,100,200,300,400,500}){Fake f=new Fake();f.pollMs=interval;f.deLatencyMs=interval==0?7:0;f.run();eq(f.de==5&&f.emitted("REFRESH_DONE"),"busy/idle behavior at "+interval);for(int i=1;i<f.deTimes.size();i++)eq(f.deTimes.get(i)-f.deTimes.get(i-1)==interval+f.deLatencyMs,"selected DE spacing "+interval);eq(f.d4==1,"no repeated refresh at "+interval);}passed("all nine polling intervals including zero drive actual DE spacing");
+        Fake supply=new Fake();supply.foreverBusy=true;supply.deSupplyAt=6;rejects(supply::run,"mid-refresh supply loss");eq(supply.d4==1,"no D4 replay after supply loss");eq(supply.emitted("SUPPLY"),"supply loss reported");eq(!supply.emitted("REFRESH_DONE")&&!supply.emitted("REFRESH_UNCONFIRMED"),"supply loss never claims completion");passed("mid-refresh low voltage reports supply loss and never replays D4");
+        Fake supply2=new Fake();supply2.deSupplyAt=3;rejects(supply2::run,"early supply loss 6502");eq(supply2.d4==1,"no D4 replay after early supply loss");passed("6502 during refresh is reported as supply loss");
         Fake latency=new Fake();latency.pollMs=200;latency.deLatencyMs=37;latency.run();for(int i=1;i<latency.deTimes.size();i++)eq(latency.deTimes.get(i)-latency.deTimes.get(i-1)==237,"response time plus requested wait");passed("poll interval is measured after each response");
         for(int interval:new int[]{-1,501,1000,2000,Integer.MAX_VALUE}){Fake f=new Fake();f.pollMs=interval;rejects(f::run,"invalid poll interval "+interval);eq(f.d1+f.d8+f.pin+f.d3+f.d4+f.de==0,"invalid poll interval sends no APDUs");}passed("negative and over-500ms polling intervals stop before any APDU");
         Fake waiting=new Fake();waiting.pollMs=500;waiting.cancelWhilePolling=true;rejects(waiting::run,"stop during poll wait");eq(waiting.de==1&&waiting.time-waiting.deTimes.get(0)==300,"poll wait remains cancellable within 100ms checks");passed("polling wait does not delay cancellation");

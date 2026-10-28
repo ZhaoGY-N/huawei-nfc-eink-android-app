@@ -12,9 +12,28 @@ public final class ShellBridge extends Binder {
  private volatile boolean active,cancelled;private volatile File stop;
  public ShellBridge()throws Exception {
   if(android.os.Process.myUid()!=0&&android.os.Process.myUid()!=2000)throw new SecurityException("Shell/root required");
-  Object pm=Class.forName("android.app.ActivityThread").getMethod("getPackageManager").invoke(null);
-  ApplicationInfo info=(ApplicationInfo)Class.forName("android.content.pm.IPackageManager").getMethod("getApplicationInfo",String.class,long.class,int.class).invoke(pm,"org.nfcresearch.qpolllab",0L,0);
+  ApplicationInfo info=appInfo();
   if(info==null)throw new IllegalStateException("App missing");appUid=info.uid;apk=info.sourceDir;
+ }
+ /**
+  * Resolve the app's package info through IPackageManager. The hidden interface takes the flags as
+  * int on Android 12 and earlier and as long since Android 13, so pick whichever overload this
+  * system actually declares instead of assuming one signature.
+  */
+ private static ApplicationInfo appInfo()throws Exception {
+  Object pm=Class.forName("android.app.ActivityThread").getMethod("getPackageManager").invoke(null);
+  java.lang.reflect.Method method=null;
+  for(java.lang.reflect.Method candidate:Class.forName("android.content.pm.IPackageManager").getMethods()){
+   Class<?>[] types=candidate.getParameterTypes();
+   if(!candidate.getName().equals("getApplicationInfo")||types.length!=3||types[0]!=String.class||types[2]!=int.class)continue;
+   if(types[1]==long.class||types[1]==int.class){method=candidate;break;}
+  }
+  if(method==null)throw new NoSuchMethodException("IPackageManager.getApplicationInfo(String,flags,int)");
+  // Assign in separate branches: "cond ? Long.valueOf(0L) : Integer.valueOf(0)" applies binary
+  // numeric promotion and always yields a Long, which the int overload rejects.
+  Object flags;
+  if(method.getParameterTypes()[1]==long.class)flags=Long.valueOf(0L);else flags=Integer.valueOf(0);
+  return (ApplicationInfo)method.invoke(pm,"org.nfcresearch.qpolllab",flags,Integer.valueOf(0));
  }
  private void log(String line){synchronized(lock){logs.append(line).append('\n');if(logs.length()>50000)logs.delete(0,logs.indexOf("\n",logs.length()-40000)+1);}}
  private void cancel(){cancelled=true;File file=stop;if(file!=null)try{file.createNewFile();}catch(Exception ignored){}}

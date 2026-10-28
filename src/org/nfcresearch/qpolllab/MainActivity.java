@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
     private final Handler main=new Handler();
     private final ArrayList<View> idleControls=new ArrayList<>();
     private final StringBuilder transcript=new StringBuilder();
-    private final int[] durations={5,10,30,60},powerTimes={500,1000,2000,3000,4000,5000},pollTimes={0,10,20,50,100,200,300,400,500},blockSizes={1,2,4,8,16};
+    private final int[] durations={5,10,30,60},powerTimes={500,1000,2000,3000,4000,5000,6000,8000,10000},pollTimes={0,10,20,50,100,200,300,400,500},blockSizes={1,2,4,8,16};
     private TextView state,detail,log,imageInfo,thresholdLabel;
     private PixelPreview preview;
     private ProgressBar progress;
@@ -107,7 +107,10 @@ public final class MainActivity extends Activity {
         page.addView(action("Shizuku 授权 / 连接",v->connectShizuku()));
         page.addView(text("在 Shizuku 中通过无线调试或 Root 启动服务，再点击授权 / 连接。更换启动方式后重新连接。",12,0xff68766e));
         page.addView(text("Q-Poll 寻卡方式",14,0xff263e35));
-        discoveryBackend=spinner(new String[]{"系统 QTag（默认）","SN220 HAL 兼容（实验，需 Root）","直接 Q-Poll（实验，SN100U 待验证）"});page.addView(discoveryBackend);
+        discoveryBackend=spinner(new String[]{"系统 QTag（默认）","NXP HAL 兼容（实验，需 Root）","直接 Q-Poll（实验，SN100U 待验证）"});page.addView(discoveryBackend);
+        // Android 12 and older have no INfcAdapter.sendVendorNciMessage, so system QTag and direct
+        // Q-Poll cannot work there; default to the HAL compatibility layer instead of a dead option.
+        if(android.os.Build.VERSION.SDK_INT<33)discoveryBackend.setSelection(1);
         page.addView(text("QTag 被拒绝时可手动尝试直接 Q-Poll。直接方式需要可读的 NFC 日志；控制器接受命令后，仍需验证屏幕标签回调。检查 NFC 与普通 NFC-A 对照使用系统方式。",12,0xff68766e));
         page.addView(action("检查芯片 / NFC",v->start("inspect")));
         section(page,"Q-Poll 能力测试");
@@ -162,9 +165,9 @@ public final class MainActivity extends Activity {
         page.addView(text("支持相同原厂配置的 552×768 四色屏。发送时持续贴合并保持应用在前台；切换本应用内的页面不会中断操作。",12,0xff68766e));
         page=pageBodies[2];section(page,"高级参数");
         page.addView(text("参数用于下一次发送，运行期间锁定。",12,0xff68766e));
-        section(page,"上电等待时间");power=spinner(new String[]{"500 ms","1000 ms","2000 ms（默认）","3000 ms","4000 ms","5000 ms"});
+        section(page,"上电等待时间");power=spinner(new String[]{"500 ms","1000 ms","2000 ms（默认）","3000 ms","4000 ms","5000 ms","6000 ms","8000 ms","10000 ms"});
         int savedPower=getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("powerMs",2000),selectedPower=2;for(int i=0;i<powerTimes.length;i++)if(powerTimes[i]==savedPower)selectedPower=i;power.setSelection(selectedPower);page.addView(power);
-        page.addView(text("写入刷新指令中的上电等待参数，用于屏幕刷新准备阶段。",12,0xff68766e));
+        page.addView(text("写入刷新指令中的上电等待参数，用于屏幕刷新准备阶段。四色全刷约需 30 秒持续供能；若中途报「供电不足」而画面只刷了一部分，可提高到 5000 ms 以上重试（D4 应答时间会随之变长）。",12,0xff68766e));
         power.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("powerMs",powerTimes[pos]).apply();}public void onNothingSelected(AdapterView<?> p){}});
         section(page,"状态查询间隔");poll=spinner(new String[]{"0 ms · 连续查询","10 ms","20 ms","50 ms","100 ms","200 ms","300 ms","400 ms","500 ms（默认）"});
         int savedPoll=getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("pollMs",PanelProtocol.DEFAULT_POLL_MS),selectedPoll=pollTimes.length-1;for(int i=0;i<pollTimes.length;i++)if(pollTimes[i]==savedPoll)selectedPoll=i;poll.setSelection(selectedPoll);page.addView(poll);
@@ -279,7 +282,7 @@ public final class MainActivity extends Activity {
         if(mode.equals("qtag"))capabilityInfo.setText("Q-Poll：测试中，等待实际寻卡命令与响应…");
         stopFile=sessionStop;busy=true;terminal=false;scanning=false;failure.clear();controls();progress.setProgress(0);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        state.setText("连接 Shizuku / NFC");detail.setText(transport.equals("sn220")?"准备 SN220 兼容层":transport.equals("direct")?"准备直接 Q-Poll 寻卡":"使用系统 NFC 后端");
+        state.setText("连接 Shizuku / NFC");detail.setText(transport.equals("sn220")?"准备 NXP HAL 兼容层":transport.equals("direct")?"准备直接 Q-Poll 寻卡":"使用系统 NFC 后端");
         append("──────── "+mode+" · 寻卡 "+seconds+" 秒 ────────");
         new Thread(()->{try{
             runBridge(mode,seconds,jobFile,imageFile,sessionStop);
