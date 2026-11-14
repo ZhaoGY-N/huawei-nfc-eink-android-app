@@ -155,6 +155,13 @@ public final class PanelImage {
         return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,mode,adjustments,ColorMixPreset.LEGACY_FS);
     }
     public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,TestImageMode mode,ImageAdjustments adjustments,ColorMixPreset mixPreset) {
+        return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,mode,adjustments,mixPreset,-1);
+    }
+    /**
+     * @param reinkMode -1 keeps the original project pipeline; 0..3 select the four imported recipes.
+     */
+    public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,TestImageMode mode,ImageAdjustments adjustments,ColorMixPreset mixPreset,int reinkMode) {
+        if(reinkMode < -1 || reinkMode >= ReinkRaster.MODES.length)throw new IllegalArgumentException("出图方法无效");
         calibrated=mode.calibrationPalette(calibrated);
         if(mode.fixedRaster()){
             byte[] codes=mode.fixedCodes(552,768);PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
@@ -171,7 +178,7 @@ public final class PanelImage {
             String settings="混色算法色卡 · "+mixPreset.title+" · 使用当前校色色板 · 固定目标色，不受亮度、色温、二值化、裁切、简化和抖动开关影响";
             return new Prepared(image,packed,settings,panelType);
         }
-        if(block>1)dither=false;
+        if(block>1&&reinkMode<0)dither=false;
         Bitmap input=rotated(source,rotation);
         Bitmap fitted=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);Canvas canvas=new Canvas(fitted);canvas.drawColor(Color.WHITE);
         float sx=552f/input.getWidth(),sy=768f/input.getHeight(),scale=cover?Math.max(sx,sy):Math.min(sx,sy);
@@ -179,18 +186,34 @@ public final class PanelImage {
         canvas.drawBitmap(input,null,new RectF((552-w)/2,(768-h)/2,(552+w)/2,(768+h)/2),new Paint(Paint.FILTER_BITMAP_FLAG));
         int[] pixels=new int[552*768];
         fitted.getPixels(pixels,0,552,0,0,552,768);
+        if(mode==TestImageMode.STYLE_CHART){
+            // A comparison chart must not inherit the previous photo's editor settings.
+            adjustments=ImageAdjustments.NONE;binary=false;dither=true;block=1;mixPreset=ColorMixPreset.LEGACY_FS;
+        }
         adjustments.applyTo(pixels);
-        byte[] codes=calibrated==null||binary?ImageRaster.quantize(pixels,552,768,binary,threshold,dither,block)
-            :CalibratedRaster.quantize(pixels,552,768,dither,block,calibrated,mixPreset);
+        byte[] codes;
+        String conversionDescription;
+        if(reinkMode>=0){
+            // The imported recipes own their quantization/dither behaviour. They still honour
+            // the measured on-screen palette and the editor's brightness/temperature/contrast.
+            int[] outputPalette=calibrated==null?CalibrationPalette.defaults():calibrated;
+            codes=ReinkRaster.quantize(pixels,552,768,reinkMode,outputPalette);
+            conversionDescription="出图方法："+ReinkRaster.MODES[reinkMode]+"（"+ReinkRaster.HINTS[reinkMode]+"） · 二值化/色块/手动抖动设置不参与此方法";
+        }else{
+            codes=calibrated==null||binary?ImageRaster.quantize(pixels,552,768,binary,threshold,dither,block)
+                :CalibratedRaster.quantize(pixels,552,768,dither,block,calibrated,mixPreset);
+            conversionDescription=(binary?"黑白二值化 · 阈值 "+threshold:"黑白黄红四色")+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭");
+        }
         // An unselected panel can still preview; sending requires an explicit selection.
         PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
         byte[] packed=type.pack(codes);
         int[] appearance=calibrated==null?type.preview(packed):type.preview(packed,calibrated);
         Bitmap image=Bitmap.createBitmap(appearance,552,768,Bitmap.Config.ARGB_8888);
-        String settings="屏幕："+(panelType.isEmpty()?"尚未选择":panelType)+" · "+(binary?"黑白二值化 · 阈值 "+threshold:"黑白黄红四色")+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭")+" · "+(cropped?"已手动裁切 · ":"")+"旋转 "+rotation+"° · "+(cover?"填满":"留白");
-        settings+=calibrated==null?" · 校色：关闭":" · 校色：开启（近似实物色；黑白模式仍按阈值）";
+        String settings="屏幕："+(panelType.isEmpty()?"尚未选择":panelType)+" · "+conversionDescription+" · "+(cropped?"已手动裁切 · ":"")+"旋转 "+rotation+"° · "+(cover?"填满":"留白");
+        if(mode==TestImageMode.STYLE_CHART)settings+=" · 固定目标色卡，使用保存的校色色板（未取样时为默认四色；不受普通校色开关影响）";
+        else if(mode!=TestImageMode.NONE)settings+=" · 测试图不使用校色数据";
+        else settings+=calibrated==null?" · 校色：关闭":" · 校色：开启（近似实物色；黑白模式仍按阈值）";
         settings+=" · "+adjustments.description();
-        if(mode!=TestImageMode.NONE)settings+=" · 测试图不使用校色数据";
         return new Prepared(image,packed,settings,panelType);
     }
 }

@@ -1,6 +1,25 @@
 # Huawei NFC E-Ink Android App
 
-Android 墨水屏刷新工具，当前版本 **v2.18.0**。默认通过 Shizuku（Shell / Root），也可手动选择进程兼容、旧版 Root 直连，或前台 App 通信＋Root HAL 实验路径，调用兼容系统的 NXP Q-Poll，再通过 Android ISO-DEP 向 **552×768 四色华为 A0 / A1 / A0X 墨水屏**传图刷新，使用板内已存驱动。
+Android 墨水屏刷新工具，当前版本 **v2.19.0**。默认通过 Shizuku（Shell / Root），也可手动选择进程兼容、旧版 Root 直连，或前台 App 通信＋Root HAL 实验路径，调用兼容系统的 NXP Q-Poll，再通过 Android ISO-DEP 向 **552×768 四色华为 A0 / A1 / A0X 墨水屏**传图刷新，使用板内已存驱动。
+
+## v2.19.0 · 四种高清出图方法整合与自举构建
+
+- 将用户提供的 `qpoll-lite-main` 中四种出图方法移植到原项目：**鎏金**（原始 RGB + Atkinson）、**质感**（LOMO 4×5 色彩矩阵 + Atkinson）、**色阶**（最近色纯量化、不抖动）、**水墨**（BT.601 灰阶 + Atkinson）。红均值加权 RGB 最近色距离、Atkinson 六邻域各 1/8（保留 2/8 误差）以及 LOMO 原矩阵均按来源实现保留。
+- 普通照片在“编辑 → 色彩 → 照片出图方法”切换；选择任一新方法时，原项目的二值化、色块简化和手动抖动开关不参与该配方，亮度 / 色温 / 对比度仍生效。选择“原项目算法”可完整返回原来的校色、二值化、六种混色算法与手动设置。
+- 新增“测试图 → 出图方法 · 多阶色卡（原算法基准 + 四种新方法）”。它使用固定的同一张多阶目标色卡，只切换四种算法；色卡不受旧图片的调整参数、裁切或二值化影响，并始终读取已保存的实测四色（没有取样时使用默认四色），即使普通照片的校色开关关闭也可比较。
+- 测试图锁定编辑操作，但保留出图方法选择；普通图片草稿在进入、切换或退出测试图时继续保留。四种新配方只改变像素量化结果，不改动 NFC、D1 / D3 / D4 或屏幕扫描编码协议。
+- 构建改为无 Gradle 自举流程：只需设置 `JAVA_HOME`（JDK 17+）和 `ANDROID_HOME`。Windows 入口 `build.bat` 优先使用现有 Python 3.9+；若没有，则自动下载官方 Python 3.12.10 embeddable runtime。随后从 Google SDK 仓库自动下载 command-line tools，安装 Android 34 平台、Build Tools 34.0.0 和 NDK 27.2.12479018；首次安装时会在终端显示 SDK 许可，请逐项阅读并确认。脚本再检查 / 下载缺失的 Shizuku AAR，调用 NDK Clang / LLD 编译 arm64 native 组件，执行 Java 回归并生成 **未签名、已 zipalign 的 APK**。
+- 产物位于 `dist/QPollLab-2.19.0-unsigned.apk`，并生成 SHA-256 文件。APK 不含签名，安装或覆盖安装前需自行签名。`build.py` 支持直接运行；Windows 使用 `build.bat` 可自动准备 Python。POSIX 环境可使用 `build.sh`（要求本机已有 Python 3.9+）。
+
+构建命令（Windows）：
+
+```bat
+set JAVA_HOME=C:\Program Files\Java\jdk-17
+set ANDROID_HOME=D:\Android\Sdk
+build.bat
+```
+
+验证：Java 离线回归覆盖四种配方、测量色板、alpha 合成、色阶不扩散、四种模式输出差异与取消；原协议 / 图像 / 设备后端回归全部通过。当前执行环境没有 Android SDK / NDK，且无法访问外部下载站点，因此未在此环境完成 NDK 下载、Android 编译或 APK 生成；请在可联网的 Windows 主机首次运行 `build.bat` 完成端到端构建。实体屏幕观感仍需实刷确认。
 
 ## v2.18.0 · 四色混色算法实验
 
@@ -17,7 +36,7 @@ Android 墨水屏刷新工具，当前版本 **v2.18.0**。默认通过 Shizuku�
 - 设备：授权连接、屏幕类型、首次使用清单，以及折叠的芯片检测、仅供能、Q-Poll 能力测试、普通 NFC-A 对照和只读检查。
 - 发送：独立展示最终像素预览、发送确认、进度和结果；发送进度条、充能与等待计时仅显示在此页面。失败时原始错误信息和错误码直接展示，无需先打开日志。
 - 编辑：独立预览与“构图 / 色彩 / 更多”工具，支持选图、最近图片、测试图、裁切、旋转、亮度 / 色温 / 对比度、二值化、阈值、色块简化和抖动。与发送页共用同一份准备好的像素快照，保留全屏缩放与 1:1 像素查看；切换到发送页不自动发送。
-- 设置：折叠的发送参数、执行方式与兼容实验、屏幕校色。参数保存在本地；校色支持相册照片四色取样、RGB / 十六进制手调，以及六种混色算法预设。
+- 设置：折叠的发送参数、执行方式与兼容实验、屏幕校色。参数保存在本地；校色支持相册照片四色取样、RGB / 十六进制手调，以及六种混色算法预设。编辑页另可选择鎏金、质感、色阶、水墨四种出图方法。
 - 本地自动保存编辑草稿，包括原图、当前裁切结果、裁切窗口、旋转和显示方式；进入校色测试后可退出并恢复原编辑。
 - 保留屏幕规格和原厂扫描配置检查，不限制屏幕 UID；发送前确认，运行中可停止。
 - D1 的 C0（FMSC APPID）接受参考实现支持的 `201EA001` 和 `00000001`；未知值仍停止，其他屏幕规格校验保留。
@@ -141,34 +160,21 @@ Android 墨水屏刷新工具，当前版本 **v2.18.0**。默认通过 Shizuku�
 
 ## 构建与验证
 
-需要 Python 3.9+、JDK 17、Android SDK platform android-34、build-tools 34.0.0，以及 Android NDK（本次验证使用 27.2.12479018）。设置 `JAVA_HOME`、`ANDROID_HOME`、`ANDROID_NDK_HOME` 指向本机安装目录，然后在仓库根目录运行：
+当前版本的 Windows 一键构建入口位于仓库根目录 `build.bat`。只需指定完整 JDK 17+ 与 Android SDK 安装 / 下载目录：
 
-```sh
-python3 tests/run_java.py
-cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined tests/nci_rewrite_test.c -o build/nci-rewrite-test
-build/nci-rewrite-test
-cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined tests/hal_discovery_test.c -o build/hal-discovery-test
-build/hal-discovery-test
-cc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined tests/hook_debug_test.c -o build/hook-debug-test
-build/hook-debug-test
-python3 build.py
+```bat
+set JAVA_HOME=C:\Program Files\Java\jdk-17
+set ANDROID_HOME=D:\Android\Sdk
+build.bat
 ```
 
-脚本使用 Android SDK 的命令行工具构建，无 Gradle、无构建期下载。Shizuku API / provider / aidl / shared 13.1.5 依赖已固定在 `libs/`。构建脚本当前使用 Unix 工具路径；Windows 可在 WSL 中运行。
+首次构建会自动下载缺失的 Android command-line tools、Android 34 平台、Build Tools 34.0.0、NDK 27.2.12479018，以及缺少的 Shizuku AAR；NDK 中的 Clang / LLD 用于从 `native/` 编译 arm64 组件。若 Windows 没有 Python 3.9+，`build.bat` 会先下载官方 Python 3.12.10 embeddable runtime。首次 SDK 安装需要在终端逐项阅读并接受 Android SDK 许可。构建前默认运行 Java 离线回归；可传入 `--skip-tests` 跳过。
 
-设置 `ANDROID_NDK_HOME` 后，`build.py` 自动运行 `native/build.sh`，从源码生成 arm64 兼容库及注入器。生成物位于忽略的 `assets/native/`，不采用 fork 的预编译二进制。也可先单独运行 `sh native/build.sh`；后续构建会校验源码与二进制清单，拒绝缺失或过期的原生资产。
+输出为 `dist/QPollLab-2.19.0-unsigned.apk` 与对应 `.sha256` 文件。APK 已 zipalign、未签名；安装前必须使用自己的密钥签名。脚本不创建或保存签名密钥。
 
-如安装了 `lzokay==2.1.0`，可独立检查解压与扫描打包：
+其他环境可直接用 `python3 build.py`（Python 3.9+）或 `build.sh`（POSIX，需本机 Python 3.9+）。`build.py` 本身会自举 Android SDK 组件，但不会自动下载 JDK；必须先设置 `JAVA_HOME`。`--skip-tests` 只跳过 Java 测试，不跳过 native 编译、打包或 APK 完整性检查。
 
-```sh
-python3 tests/check_fixtures.py build/<protocol-tests-directory>
-```
-
-APK 和 SHA-256 输出在 `dist/`。首次构建会在 `build/` 生成本地调试签名密钥；密钥、构建缓存和 APK 不纳入 Git。自行构建时需要保留自己的密钥，以支持后续覆盖安装。
-
-```sh
-adb install -r dist/QPollLab-2.17.0.apk
-```
+独立参考夹具检查 `tests/check_fixtures.py` 需要额外安装 `lzokay==2.1.0`，此模块不参与 Android APK，也不属于默认构建依赖。`assets/native/` 是构建生成目录，已加入忽略规则；每次构建都会用指定 NDK 从源码重建，再通过 `build.sha256` 清单校验输入与输出一致性。
 
 ## 隐私
 
