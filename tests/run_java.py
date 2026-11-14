@@ -22,8 +22,10 @@ subprocess.run([str(jdk / 'bin/javac'), '-encoding', 'UTF-8', '--release', '8', 
     str(root / 'src/org/nfcresearch/qpolllab/ImageBlocks.java'),
     str(root / 'src/org/nfcresearch/qpolllab/ImageRaster.java'),
     str(root / 'src/org/nfcresearch/qpolllab/CalibrationPalette.java'),
+    str(root / 'src/org/nfcresearch/qpolllab/ColorMixPreset.java'),
     str(root / 'src/org/nfcresearch/qpolllab/CalibratedRaster.java'),
     str(root / 'tests/CalibrationTest.java'),
+    str(root / 'tests/ColorMixTest.java'),
     str(root / 'src/org/nfcresearch/qpolllab/ImageAdjustments.java'),
     str(root / 'tests/ImageAdjustmentsTest.java'),
     str(root / 'src/org/nfcresearch/qpolllab/CropWindow.java'),
@@ -58,7 +60,7 @@ subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpollla
 subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.ImageBlocksTest'], check=True)
 subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.ImageRasterTest', str(out)], check=True)
 subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.CropWindowTest'], check=True)
-for test in ('CalibrationTest', 'ImageAdjustmentsTest', 'PanelTypeTest', 'ConnectionRetryTest', 'SessionFailureTest', 'NciDiscoveryTest', 'BackendPolicyTest', 'BackendOptionsTest', 'PowerSessionTest', 'ReaderModeCompatTest', 'DirectQPollTest', 'SessionWireTest', 'TestImageModeTest', 'RecentImageStoreTest', 'WorkflowStatusTest', 'ImageDraftStoreTest'):
+for test in ('CalibrationTest', 'ColorMixTest', 'ImageAdjustmentsTest', 'PanelTypeTest', 'ConnectionRetryTest', 'SessionFailureTest', 'NciDiscoveryTest', 'BackendPolicyTest', 'BackendOptionsTest', 'PowerSessionTest', 'ReaderModeCompatTest', 'DirectQPollTest', 'SessionWireTest', 'TestImageModeTest', 'RecentImageStoreTest', 'WorkflowStatusTest', 'ImageDraftStoreTest'):
     subprocess.run([str(jdk / 'bin/java'), '-cp', str(out), 'org.nfcresearch.qpolllab.' + test, str(out)], check=True)
 (root / 'build/last-test-dir.txt').write_text(out.name, encoding='utf-8')
 print('FIXTURES:', out)

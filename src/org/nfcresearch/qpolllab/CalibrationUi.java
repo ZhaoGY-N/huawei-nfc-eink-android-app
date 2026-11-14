@@ -18,6 +18,7 @@ public final class CalibrationUi {
         void calibrationModal(boolean open);
         void calibrationLoading(boolean loading);
         void showCalibrationChart();
+        void showMixingChart();
     }
     private static final int PICK=51;
     private static final String KEY="calibration.shared.";
@@ -29,7 +30,8 @@ public final class CalibrationUi {
     private Dialog activeDialog;
     private final Button[] colors=new Button[4];
     private CheckBox enabled;
-    private TextView profile;
+    private Spinner mixPreset;
+    private TextView mixHint,profile;
     private boolean updating,pendingPhoto,editable=true;
 
     public CalibrationUi(Activity activity,Host host){this.activity=activity;this.host=host;prefs=activity.getSharedPreferences("refresh-settings",Activity.MODE_PRIVATE);}
@@ -45,12 +47,21 @@ public final class CalibrationUi {
         enabled=new CheckBox(activity);enabled.setText("启用校色色板（A0 / A1 共用）");controls.add(enabled);page.addView(enabled);
         enabled.setOnCheckedChangeListener((v,checked)->{if(updating)return;prefs.edit().putBoolean(KEY+"enabled",checked).apply();render();host.calibrationChanged();});
         action(page,"1. 显示校色测试图",v->host.showCalibrationChart());
-        page.addView(label("测试图左上黑、右上白、左下黄、右下红。在发送页确认并发送，等待实物刷新完成；可点击“退出校色测试 · 恢复编辑”回到原图片。测试图绕过校色、二值化、抖动和裁切。"));
-        action(page,"2. 从相册选择屏幕照片",v->openPhoto());
+        page.addView(label("该图只用于准确记录黑、白、黄、红四种原色，不经过混色算法。"));
+        action(page,"打开混色算法测试色卡",v->host.showMixingChart());
+        page.addView(label("色卡使用相同的灰、黄、红、橙、肤、绿、蓝、紫多阶色带。建议先完成上方四色取样；未取样时使用默认色板。切换下方预设后会自动重算预览；发送前请在编辑页确认，测试色卡不受其他图像调整影响。"));
+        page.addView(label("混色算法预设 · 普通图片启用校色时生效；下方混色测试卡始终使用这里的色板和预设"));
+        ColorMixPreset[] presets=ColorMixPreset.values();String[] names=new String[presets.length];for(int i=0;i<presets.length;i++)names[i]=presets[i].title;
+        mixPreset=new Spinner(activity);mixPreset.setAdapter(new ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,names));controls.add(mixPreset);page.addView(mixPreset);
+        mixHint=label("");page.addView(mixHint);
+        mixPreset.setSelection(preset().ordinal());
+        mixPreset.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> p){}public void onItemSelected(AdapterView<?> p,View v,int position,long id){if(updating)return;ColorMixPreset selected=presets[Math.max(0,Math.min(presets.length-1,position))];if(selected==preset())return;prefs.edit().putString(KEY+"mixPreset",selected.name()).apply();mixHint.setText(selected.description);host.calibrationChanged();}});
+        page.addView(label("2. 从相册选择屏幕照片"));
+        action(page,"选择屏幕照片并取样",v->openPhoto());
         page.addView(label("先自行拍摄屏幕，再从相册选入。在照片上分别点选四色块中心并确认取样，避开边缘、阴影和反光。照片仅在本机处理；取样不会替换当前编辑图片。"));
         page.addView(label("3. 手动微调（点击颜色，可调 RGB 或输入十六进制）"));
         for(int i=0;i<4;i++){final int code=i;colors[i]=button("",v->editColor(code));controls.add(colors[i]);page.addView(colors[i]);}
-        page.addView(label("手调值描述屏幕实际显示的四色。开启后，转换按取样黑白范围归一化，使用线性 RGB 混色和蛇形误差扩散；预览近似显示实物颜色。黑白二值化仍使用原阈值。关闭校色即可对比默认转换。"));
+        page.addView(label("手调值描述屏幕实际显示的四色。启用校色后，转换按取样黑白范围归一化。可选最近色、OKLab 感知距离、四色比例分解，以及 Floyd–Steinberg / Bayer / JJN 点阵方式。预览只按取样色模拟，不包含相邻颜料的真实光学串扰。黑白二值化仍使用原阈值。"));
         action(page,"恢复默认色板并关闭校色",v->{
             prefs.edit().remove(KEY+"colors").putBoolean(KEY+"enabled",false).apply();render();host.calibrationChanged();
         });
@@ -62,10 +73,16 @@ public final class CalibrationUi {
         return result;
     }
     public int[] activePalette(){return !prefs.getBoolean(KEY+"enabled",false)?null:read();}
+    /** The mixing test chart always uses measured values, even when calibration is disabled for normal photos. */
+    public int[] testPalette(){return read();}
+    public ColorMixPreset activePreset(){return preset();}
+    private ColorMixPreset preset(){return ColorMixPreset.fromName(prefs.getString(KEY+"mixPreset",ColorMixPreset.LEGACY_FS.name()));}
     public void setEditable(boolean value){editable=value;for(View view:controls)view.setEnabled(value);}
     private void render(){
         if(profile==null)return;profile.setText("A0 / A1 共用校色配置 · "+(prefs.getBoolean(KEY+"enabled",false)?"已启用":"未启用"));
-        updating=true;enabled.setChecked(prefs.getBoolean(KEY+"enabled",false));updating=false;
+        updating=true;enabled.setChecked(prefs.getBoolean(KEY+"enabled",false));
+        ColorMixPreset selected=preset();if(mixPreset!=null)mixPreset.setSelection(selected.ordinal());if(mixHint!=null)mixHint.setText(selected.description);
+        updating=false;
         int[] palette=read();for(int i=0;i<4;i++)swatch(colors[i],NAMES[i]+"色 · 手调",palette[i]);setEditable(editable);
     }
     private void save(int[] palette){

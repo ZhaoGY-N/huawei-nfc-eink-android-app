@@ -64,6 +64,35 @@ public final class PanelImage {
         if(code<0||code>=PALETTE.length)throw new IllegalArgumentException("无效的纯色");
         Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);bitmap.eraseColor(PALETTE[code]);return bitmap;
     }
+    /** Fixed multilevel target chart; unlike the native calibration chart it is quantized through the selected mixer. */
+    public static Bitmap mixingPattern() {
+        Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);
+        Canvas canvas=new Canvas(bitmap);canvas.drawColor(Color.WHITE);
+        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setColor(Color.BLACK);paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);paint.setTextSize(25);
+        canvas.drawText("四色混色 · 多阶对照色卡",18,32,paint);
+        paint.setTypeface(android.graphics.Typeface.DEFAULT);paint.setTextSize(15);
+        canvas.drawText("同一目标色卡 · 切换预设后重复刷写比较",18,55,paint);
+        int[] anchors={0xff808080,0xffffd000,0xffc80000,0xfff07820,0xffd99a75,0xff21834a,0xff3366cc,0xff8a4db0};
+        String[] names={"灰阶","黄","红","橙","肤","绿","蓝","紫"};
+        int left=58,right=540,steps=9;float cell=(right-left)/(float)steps;
+        for(int row=0;row<anchors.length;row++){
+            int top=68+row*83;
+            paint.setColor(Color.BLACK);paint.setTextSize(17);paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            canvas.drawText(names[row],16,top+31,paint);
+            for(int i=0;i<steps;i++){
+                float t=i/(float)(steps-1);int color=t<=0.5f?mix(Color.WHITE,anchors[row],t*2):mix(anchors[row],Color.BLACK,(t-0.5f)*2);
+                paint.setColor(color);canvas.drawRect(left+i*cell,top,left+(i+1)*cell,top+45,paint);
+            }
+            paint.setShader(new LinearGradient(left,0,right,0,new int[]{Color.WHITE,anchors[row],Color.BLACK},new float[]{0,0.5f,1},Shader.TileMode.CLAMP));
+            canvas.drawRect(left,top+49,right,top+63,paint);paint.setShader(null);
+            paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);
+            canvas.drawRect(left,top,right,top+45,paint);canvas.drawRect(left,top+49,right,top+63,paint);paint.setStyle(Paint.Style.FILL);
+        }
+        paint.setColor(Color.BLACK);paint.setTypeface(android.graphics.Typeface.DEFAULT);paint.setTextSize(14);
+        canvas.drawText("顺序：灰阶 / 黄 / 红 / 橙 / 肤色 / 绿 / 蓝 / 紫",18,744,paint);
+        canvas.drawRect(1,1,550,766,paint);
+        return bitmap;
+    }
     public static Bitmap tonePattern() {
         Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);
         Canvas canvas=new Canvas(bitmap);canvas.drawColor(Color.WHITE);
@@ -123,12 +152,24 @@ public final class PanelImage {
         return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,chart?TestImageMode.CALIBRATION:TestImageMode.NONE,adjustments);
     }
     public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,TestImageMode mode,ImageAdjustments adjustments) {
+        return prepare(source,rotation,cover,dither,block,binary,threshold,cropped,panelType,calibrated,mode,adjustments,ColorMixPreset.LEGACY_FS);
+    }
+    public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,TestImageMode mode,ImageAdjustments adjustments,ColorMixPreset mixPreset) {
         calibrated=mode.calibrationPalette(calibrated);
         if(mode.fixedRaster()){
             byte[] codes=mode.fixedCodes(552,768);PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
             byte[] packed=type.pack(codes);
             return new Prepared(Bitmap.createBitmap(type.preview(packed),552,768,Bitmap.Config.ARGB_8888),packed,
                 (mode==TestImageMode.CALIBRATION?"校色基准图 · 左上黑 / 右上白 / 左下黄 / 右下红":"纯色测试图")+" · 固定四色编码，不使用校色数据，绕过所有图片调整",panelType);
+        }
+        if(mode==TestImageMode.MIXING){
+            if(calibrated==null)calibrated=CalibrationPalette.defaults();
+            int[] pixels=new int[552*768];source.getPixels(pixels,0,552,0,0,552,768);
+            byte[] codes=CalibratedRaster.quantize(pixels,552,768,true,1,calibrated,mixPreset);
+            PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);byte[] packed=type.pack(codes);
+            int[] appearance=type.preview(packed,calibrated);Bitmap image=Bitmap.createBitmap(appearance,552,768,Bitmap.Config.ARGB_8888);
+            String settings="混色算法色卡 · "+mixPreset.title+" · 使用当前校色色板 · 固定目标色，不受亮度、色温、二值化、裁切、简化和抖动开关影响";
+            return new Prepared(image,packed,settings,panelType);
         }
         if(block>1)dither=false;
         Bitmap input=rotated(source,rotation);
@@ -140,7 +181,7 @@ public final class PanelImage {
         fitted.getPixels(pixels,0,552,0,0,552,768);
         adjustments.applyTo(pixels);
         byte[] codes=calibrated==null||binary?ImageRaster.quantize(pixels,552,768,binary,threshold,dither,block)
-            :CalibratedRaster.quantize(pixels,552,768,dither,block,calibrated);
+            :CalibratedRaster.quantize(pixels,552,768,dither,block,calibrated,mixPreset);
         // An unselected panel can still preview; sending requires an explicit selection.
         PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
         byte[] packed=type.pack(codes);
