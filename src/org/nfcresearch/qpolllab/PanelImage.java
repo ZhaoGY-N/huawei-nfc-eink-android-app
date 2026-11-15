@@ -19,11 +19,16 @@ import java.io.InputStream;
 public final class PanelImage {
     public static final int[] PALETTE={ImageRaster.color(0),ImageRaster.color(1),ImageRaster.color(2),ImageRaster.color(3)};
     public static final class Prepared {
+        /** Final four-colour raster, exactly matching the payload that will be sent. */
         public final Bitmap preview;
+        /** Source image fitted to the same panel frame before colour conversion/adjustments. */
+        public final Bitmap originalPreview;
         public final byte[] packed;
         public final String settings;
         public final String panelType;
-        Prepared(Bitmap preview,byte[] packed,String settings,String panelType){this.preview=preview;this.packed=packed;this.settings=settings;this.panelType=panelType;}
+        Prepared(Bitmap preview,Bitmap originalPreview,byte[] packed,String settings,String panelType){
+            this.preview=preview;this.originalPreview=originalPreview;this.packed=packed;this.settings=settings;this.panelType=panelType;
+        }
     }
     public static Bitmap load(ContentResolver resolver,Uri uri) throws Exception {
         BitmapFactory.Options options=new BitmapFactory.Options();options.inJustDecodeBounds=true;
@@ -64,33 +69,26 @@ public final class PanelImage {
         if(code<0||code>=PALETTE.length)throw new IllegalArgumentException("无效的纯色");
         Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);bitmap.eraseColor(PALETTE[code]);return bitmap;
     }
-    /** Fixed multilevel target chart; unlike the native calibration chart it is quantized through the selected mixer. */
+    /** Fixed multilevel target chart generated from an opaque, deterministic RGB pixel array. */
     public static Bitmap mixingPattern() {
-        Bitmap bitmap=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);
-        Canvas canvas=new Canvas(bitmap);canvas.drawColor(Color.WHITE);
-        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setColor(Color.BLACK);paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);paint.setTextSize(25);
+        int[] pixels=TestChartPattern.createPixels();
+        // Bitmap.createBitmap(int[], ...) may return an immutable bitmap. Canvas requires
+        // a mutable backing store, so allocate a mutable ARGB_8888 bitmap and copy the
+        // deterministic source pixels into it before drawing the decorative labels.
+        Bitmap bitmap=Bitmap.createBitmap(TestChartPattern.WIDTH,TestChartPattern.HEIGHT,Bitmap.Config.ARGB_8888);
+        bitmap.setPixels(pixels,0,TestChartPattern.WIDTH,0,0,TestChartPattern.WIDTH,TestChartPattern.HEIGHT);
+        // Text is decorative only; all chart colours and ramps already exist as exact RGB pixels.
+        Canvas canvas=new Canvas(bitmap);
+        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);paint.setColor(Color.BLACK);
+        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);paint.setTextSize(25);
         canvas.drawText("四色混色 · 多阶对照色卡",18,32,paint);
         paint.setTypeface(android.graphics.Typeface.DEFAULT);paint.setTextSize(15);
-        canvas.drawText("同一目标色卡 · 切换预设后重复刷写比较",18,55,paint);
-        int[] anchors={0xff808080,0xffffd000,0xffc80000,0xfff07820,0xffd99a75,0xff21834a,0xff3366cc,0xff8a4db0};
-        String[] names={"灰阶","黄","红","橙","肤","绿","蓝","紫"};
-        int left=58,right=540,steps=9;float cell=(right-left)/(float)steps;
-        for(int row=0;row<anchors.length;row++){
-            int top=68+row*83;
-            paint.setColor(Color.BLACK);paint.setTextSize(17);paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            canvas.drawText(names[row],16,top+31,paint);
-            for(int i=0;i<steps;i++){
-                float t=i/(float)(steps-1);int color=t<=0.5f?mix(Color.WHITE,anchors[row],t*2):mix(anchors[row],Color.BLACK,(t-0.5f)*2);
-                paint.setColor(color);canvas.drawRect(left+i*cell,top,left+(i+1)*cell,top+45,paint);
-            }
-            paint.setShader(new LinearGradient(left,0,right,0,new int[]{Color.WHITE,anchors[row],Color.BLACK},new float[]{0,0.5f,1},Shader.TileMode.CLAMP));
-            canvas.drawRect(left,top+49,right,top+63,paint);paint.setShader(null);
-            paint.setColor(Color.BLACK);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(1);
-            canvas.drawRect(left,top,right,top+45,paint);canvas.drawRect(left,top+49,right,top+63,paint);paint.setStyle(Paint.Style.FILL);
+        canvas.drawText("相同目标色卡 · 八组九阶色块与连续渐变",18,55,paint);
+        paint.setTextSize(12);
+        for(int row=0;row<TestChartPattern.NAMES.length;row++){
+            int top=72+row*((TestChartPattern.HEIGHT-134)/8);
+            canvas.drawText(TestChartPattern.NAMES[row],17,top+28,paint);
         }
-        paint.setColor(Color.BLACK);paint.setTypeface(android.graphics.Typeface.DEFAULT);paint.setTextSize(14);
-        canvas.drawText("顺序：灰阶 / 黄 / 红 / 橙 / 肤色 / 绿 / 蓝 / 紫",18,744,paint);
-        canvas.drawRect(1,1,550,766,paint);
         return bitmap;
     }
     public static Bitmap tonePattern() {
@@ -161,59 +159,106 @@ public final class PanelImage {
      * @param reinkMode -1 keeps the original project pipeline; 0..3 select the four imported recipes.
      */
     public static Prepared prepare(Bitmap source,int rotation,boolean cover,boolean dither,int block,boolean binary,int threshold,boolean cropped,String panelType,int[] calibrated,TestImageMode mode,ImageAdjustments adjustments,ColorMixPreset mixPreset,int reinkMode) {
+        if(source==null||source.isRecycled())throw new IllegalArgumentException("原图不可用");
+        if(mode==null)mode=TestImageMode.NONE;
+        if(adjustments==null)adjustments=ImageAdjustments.NONE;
+        if(mixPreset==null)mixPreset=ColorMixPreset.LEGACY_FS;
         if(reinkMode < -1 || reinkMode >= ReinkRaster.MODES.length)throw new IllegalArgumentException("出图方法无效");
         calibrated=mode.calibrationPalette(calibrated);
+
+        // Generated multilevel charts already are panel-sized target rasters. Do not route
+        // them through photo rotation/cover fitting: their source pixels are the test fixture.
+        boolean generatedChart=mode==TestImageMode.MIXING||mode==TestImageMode.STYLE_CHART;
+        Bitmap fitted;
+        if(generatedChart){
+            if(source.getWidth()!=552||source.getHeight()!=768)
+                throw new IllegalArgumentException("多阶测试色卡必须是 552×768 原始像素");
+            fitted=source;
+        }else fitted=fitSource(source,rotation,cover);
+        Bitmap originalPreview=fitted;
+
         if(mode.fixedRaster()){
-            byte[] codes=mode.fixedCodes(552,768);PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
-            byte[] packed=type.pack(codes);
-            return new Prepared(Bitmap.createBitmap(type.preview(packed),552,768,Bitmap.Config.ARGB_8888),packed,
+            byte[] codes=mode.fixedCodes(552,768);PanelType type=panel(panelType);byte[] packed=type.pack(codes);
+            Bitmap image=Bitmap.createBitmap(type.preview(packed),552,768,Bitmap.Config.ARGB_8888);
+            return new Prepared(image,originalPreview,packed,
                 (mode==TestImageMode.CALIBRATION?"校色基准图 · 左上黑 / 右上白 / 左下黄 / 右下红":"纯色测试图")+" · 固定四色编码，不使用校色数据，绕过所有图片调整",panelType);
         }
+
+        int[] pixels=new int[552*768];fitted.getPixels(pixels,0,552,0,0,552,768);
+        byte[] codes;
+        String conversionDescription;
+
         if(mode==TestImageMode.MIXING){
-            if(calibrated==null)calibrated=CalibrationPalette.defaults();
-            int[] pixels=new int[552*768];source.getPixels(pixels,0,552,0,0,552,768);
-            byte[] codes=CalibratedRaster.quantize(pixels,552,768,true,1,calibrated,mixPreset);
-            PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);byte[] packed=type.pack(codes);
-            int[] appearance=type.preview(packed,calibrated);Bitmap image=Bitmap.createBitmap(appearance,552,768,Bitmap.Config.ARGB_8888);
-            String settings="混色算法色卡 · "+mixPreset.title+" · 使用当前校色色板 · 固定目标色，不受亮度、色温、二值化、裁切、简化和抖动开关影响";
-            return new Prepared(image,packed,settings,panelType);
+            // The target card and its mixing quantizer stay fixed, but the selected
+            // output-method profile can intentionally tune the RGB input before quantizing.
+            int[] outputPalette=calibrated==null?CalibrationPalette.defaults():calibrated;
+            int[] exactEndpoints=pixels.clone();
+            adjustments.applyTo(pixels);
+            codes=CalibratedRaster.quantize(pixels,552,768,true,1,outputPalette,mixPreset);
+            TestChartPolicy.preserveExactEndpoints(exactEndpoints,codes);
+            TestChartPolicy.requireVisible(codes,"混色算法多阶色卡");
+            if(adjustments.isNeutral())TestChartPolicy.requireChromaticCodes(codes,"混色算法多阶色卡");
+            PanelType type=panel(panelType);byte[] packed=type.pack(codes);
+            Bitmap image=Bitmap.createBitmap(TestChartPolicy.previewPixels(codes,outputPalette),552,768,Bitmap.Config.ARGB_8888);
+            String settings="混色算法色卡 · "+mixPreset.title+" · 使用当前校色色板 · 目标图案固定，允许调整亮度 / 色温 / 对比度（"+adjustments.description()+"）";
+            settings+="\n四色输出占比："+TestChartPolicy.histogramText(codes);
+            settings+="\n当前显示色板："+TestChartPolicy.paletteText(outputPalette);
+            return new Prepared(image,originalPreview,packed,settings,panelType);
         }
-        if(block>1&&reinkMode<0)dither=false;
+
+        boolean chart=mode==TestImageMode.STYLE_CHART;
+        ImageAdjustments effectiveAdjustments=adjustments;
+        if(chart){binary=false;dither=true;block=1;mixPreset=ColorMixPreset.LEGACY_FS;}
+        else if(block>1&&reinkMode<0)dither=false;
+        int[] exactEndpoints=chart?pixels.clone():null;
+        effectiveAdjustments.applyTo(pixels);
+        int[] outputPalette=calibrated==null?(chart?CalibrationPalette.defaults():null):calibrated;
+        if(reinkMode>=0){
+            if(outputPalette==null)outputPalette=CalibrationPalette.defaults();
+            codes=ReinkRaster.quantize(pixels,552,768,reinkMode,outputPalette);
+            conversionDescription="出图方法："+ReinkRaster.MODES[reinkMode]+"（"+ReinkRaster.HINTS[reinkMode]+"） · 二值化/色块/手动抖动设置不参与此方法";
+        }else if(outputPalette==null||binary){
+            codes=ImageRaster.quantize(pixels,552,768,binary,threshold,dither,block);
+            conversionDescription=(binary?"黑白二值化 · 阈值 "+threshold:"黑白黄红四色")+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭");
+        }else{
+            codes=CalibratedRaster.quantize(pixels,552,768,dither,block,outputPalette,mixPreset);
+            conversionDescription="黑白黄红四色 · 混色算法："+mixPreset.title+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭");
+        }
+        if(chart){
+            // The chart has known pure endpoints. Protect them from error carried across
+            // adjacent swatches, and fail visibly rather than silently presenting a black frame.
+            TestChartPolicy.preserveExactEndpoints(exactEndpoints,codes);
+            TestChartPolicy.requireVisible(codes,"四种出图方法多阶色卡");
+            if(effectiveAdjustments.isNeutral()&&reinkMode!=ReinkRaster.MODE_INK)
+                TestChartPolicy.requireChromaticCodes(codes,"四种出图方法多阶色卡 / "+(reinkMode<0?"原项目算法":ReinkRaster.MODES[reinkMode]));
+        }
+        PanelType type=panel(panelType);byte[] packed=type.pack(codes);
+        int[] appearance=chart?TestChartPolicy.previewPixels(codes,outputPalette):(outputPalette==null?type.preview(packed):type.preview(packed,outputPalette));
+        Bitmap image=Bitmap.createBitmap(appearance,552,768,Bitmap.Config.ARGB_8888);
+        String settings="屏幕："+(panelType.isEmpty()?"尚未选择":panelType)+" · "+conversionDescription+" · "+(cropped?"已手动裁切 · ":"")+"旋转 "+rotation+"° · "+(cover?"填满":"留白");
+        if(chart){
+            settings+=" · 固定目标色卡，使用保存的校色色板（未取样时为默认四色）；亮度 / 色温 / 对比度已作用于量化输入";
+            settings+="\n四色输出占比："+TestChartPolicy.histogramText(codes);
+            settings+="\n当前显示色板："+TestChartPolicy.paletteText(outputPalette);
+            if(reinkMode==ReinkRaster.MODE_INK)settings+="\n注意：水墨方法会主动转为 BT.601 灰度，灰色输出属于该方法的预期效果。";
+        }else if(mode!=TestImageMode.NONE)settings+=" · 测试图不使用校色数据";
+        else settings+=outputPalette==null?" · 校色：关闭":" · 校色：开启（近似实物色；黑白模式仍按阈值）";
+        settings+=" · "+effectiveAdjustments.description();
+        return new Prepared(image,originalPreview,packed,settings,panelType);
+    }
+
+    private static PanelType panel(String value){return value==null||value.isEmpty()?PanelType.A1:PanelType.parse(value);}
+
+    private static Bitmap fitSource(Bitmap source,int rotation,boolean cover){
         Bitmap input=rotated(source,rotation);
-        Bitmap fitted=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);Canvas canvas=new Canvas(fitted);canvas.drawColor(Color.WHITE);
+        Bitmap fitted=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);
+        Canvas canvas=new Canvas(fitted);canvas.drawColor(Color.WHITE);
         float sx=552f/input.getWidth(),sy=768f/input.getHeight(),scale=cover?Math.max(sx,sy):Math.min(sx,sy);
         float w=input.getWidth()*scale,h=input.getHeight()*scale;
         canvas.drawBitmap(input,null,new RectF((552-w)/2,(768-h)/2,(552+w)/2,(768+h)/2),new Paint(Paint.FILTER_BITMAP_FLAG));
-        int[] pixels=new int[552*768];
-        fitted.getPixels(pixels,0,552,0,0,552,768);
-        if(mode==TestImageMode.STYLE_CHART){
-            // A comparison chart must not inherit the previous photo's editor settings.
-            adjustments=ImageAdjustments.NONE;binary=false;dither=true;block=1;mixPreset=ColorMixPreset.LEGACY_FS;
-        }
-        adjustments.applyTo(pixels);
-        byte[] codes;
-        String conversionDescription;
-        if(reinkMode>=0){
-            // The imported recipes own their quantization/dither behaviour. They still honour
-            // the measured on-screen palette and the editor's brightness/temperature/contrast.
-            int[] outputPalette=calibrated==null?CalibrationPalette.defaults():calibrated;
-            codes=ReinkRaster.quantize(pixels,552,768,reinkMode,outputPalette);
-            conversionDescription="出图方法："+ReinkRaster.MODES[reinkMode]+"（"+ReinkRaster.HINTS[reinkMode]+"） · 二值化/色块/手动抖动设置不参与此方法";
-        }else{
-            codes=calibrated==null||binary?ImageRaster.quantize(pixels,552,768,binary,threshold,dither,block)
-                :CalibratedRaster.quantize(pixels,552,768,dither,block,calibrated,mixPreset);
-            conversionDescription=(binary?"黑白二值化 · 阈值 "+threshold:"黑白黄红四色")+" · 简化："+(block==1?"原始细节":block+"×"+block+" 色块")+" · 抖动："+(dither?"开启":"关闭");
-        }
-        // An unselected panel can still preview; sending requires an explicit selection.
-        PanelType type=panelType.isEmpty()?PanelType.A1:PanelType.parse(panelType);
-        byte[] packed=type.pack(codes);
-        int[] appearance=calibrated==null?type.preview(packed):type.preview(packed,calibrated);
-        Bitmap image=Bitmap.createBitmap(appearance,552,768,Bitmap.Config.ARGB_8888);
-        String settings="屏幕："+(panelType.isEmpty()?"尚未选择":panelType)+" · "+conversionDescription+" · "+(cropped?"已手动裁切 · ":"")+"旋转 "+rotation+"° · "+(cover?"填满":"留白");
-        if(mode==TestImageMode.STYLE_CHART)settings+=" · 固定目标色卡，使用保存的校色色板（未取样时为默认四色；不受普通校色开关影响）";
-        else if(mode!=TestImageMode.NONE)settings+=" · 测试图不使用校色数据";
-        else settings+=calibrated==null?" · 校色：关闭":" · 校色：开启（近似实物色；黑白模式仍按阈值）";
-        settings+=" · "+adjustments.description();
-        return new Prepared(image,packed,settings,panelType);
+        return fitted;
     }
+
+
+
 }

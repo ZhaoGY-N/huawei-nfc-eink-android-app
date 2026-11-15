@@ -127,7 +127,7 @@ def http_download(url: str, destination: Path) -> None:
                 subprocess.run([powershell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
                                 "-File", str(ps1), url, str(temp)], check=True)
         else:
-            request = urllib.request.Request(url, headers={"User-Agent": "QPollLab-Build/2.19"})
+            request = urllib.request.Request(url, headers={"User-Agent": "QPollLab-Build/2.19.4"})
             with urllib.request.urlopen(request, timeout=90) as response, temp.open("wb") as out:
                 total = int(response.headers.get("Content-Length", "0") or 0)
                 received = 0
@@ -393,8 +393,13 @@ def build_unsigned_apk(jdk: Path, sdk: Path, platform_jar: Path, build_tools: Pa
         classpath = os.pathsep.join(str(path) for path in [platform_jar, *dependency_jars])
         javac = java_tool(jdk, "javac")
         jar_tool = java_tool(jdk, "jar")
-        run(javac, "-encoding", "UTF-8", "--release", "8", "-classpath", classpath,
-            "-d", classes, *sources, cwd=ROOT, env=env)
+        # JDK 21 javac can emit an unnamed mandated outer-instance parameter
+        # (for example this$0) in anonymous/inner classes. Android Build Tools
+        # 34.0.0 bundles D8 8.2.2-dev, which crashes with an NPE when reading
+        # that MethodParameters entry. -parameters writes stable names for all
+        # parameters and works with both the old D8 and newer R8/D8 releases.
+        run(javac, "-encoding", "UTF-8", "--release", "8", "-parameters",
+            "-classpath", classpath, "-d", classes, *sources, cwd=ROOT, env=env)
         classes_jar = work / "classes.jar"
         run(jar_tool, "cf", classes_jar, "-C", classes, ".", cwd=ROOT, env=env)
 
