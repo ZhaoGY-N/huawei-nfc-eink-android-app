@@ -18,3 +18,9 @@ lzokay is used only by the host-side test script and is not part of the APK.
 Shizuku API 13.1.5 (api, provider, aidl, shared), copyright Rikka and contributors, MIT License. Source: https://github.com/RikkaApps/Shizuku-API . Full license: assets/licenses/Shizuku-LICENSE.txt.
 
 The experimental SN220 Root discovery adapter follows the publicly documented approach in HBWuChang's issue https://github.com/ZhaoGY-N/huawei-nfc-eink-android-app/issues/3 and device fork https://github.com/HBWuChang/huawei-nfc-eink-android-app . The implementation in `native/` is written for this branch and built locally; the fork's precompiled injectors/libraries are not redistributed. No NFC firmware, system HAL library, or display driver is included.
+
+## Four Reink Case rendering recipes (v2.19.0)
+
+`src/org/nfcresearch/qpolllab/ReinkRaster.java` is a Java port of the four rendering recipes documented in the user-supplied `qpoll-lite-main` project: 鎏金, 质感, 色阶 and 水墨. The port retains the documented LOMO 4×5 matrix, Atkinson six-neighbour kernel, BT.601 grayscale conversion and red-mean weighted RGB palette distance. The original source project's README attributes the algorithms to the Reink Case / 墨小佳 commercial application and states that the algorithms remain the original author's property and are for non-commercial research and interoperability use only. No Reink Case binary, Flutter assets or application resources are included. This notice does not grant any commercial redistribution rights; obtain permission from the relevant rights holder before commercial use or distribution.
+
+The merged implementation additionally accepts the original app's measured black/white/yellow/red palette while preserving the four wire-code indices. This adaptation is specific to this project's existing calibration and panel encoder.

@@ -42,7 +42,7 @@ public final class MainActivity extends Activity {
     private boolean powerTagActivated;
     private long powerDeadline;
     private Button rotateImage,cropImage,restoreImage;
-    private Spinner duration,fit,power,poll,blocks,panelType,charge;
+    private Spinner duration,fit,power,poll,blocks,panelType,charge,rasterStyle;
     private CheckBox dither,binary;
     private SeekBar threshold;
     private Bitmap source,originalSource;
@@ -55,6 +55,7 @@ public final class MainActivity extends Activity {
     private CalibrationUi calibration;
     private ImageAdjustmentUi adjustments;
     private PanelImage.Prepared prepared;
+    private String preparedStatus="";
     private int rotation,revision;
     private String imageName="内置四色测试图";
     private volatile boolean busy,preparing,resumed,destroyed;
@@ -74,7 +75,7 @@ public final class MainActivity extends Activity {
     private int activePage;
     private final LinearLayout[] pageFrames=new LinearLayout[4],editorBodies=new LinearLayout[3];
     private final Button[] editorTabs=new Button[3];
-    private TextView readiness,setupInfo,thresholdHint,ditherHint,sessionSteps;
+    private TextView readiness,setupInfo,thresholdHint,ditherHint,sessionSteps,rasterStyleHint;
     private Button readinessAction,setupDone,resultAction,leaveCalibration;
     private boolean initializing=true,restoringDraft,stopping;
     private String sessionStage="connecting",lastAdvice="";
@@ -220,7 +221,7 @@ public final class MainActivity extends Activity {
         LinearLayout previewCard=surface();send.addView(previewCard);
         preview=new PixelPreview(this);preview.setContentDescription("最终发送像素预览，点击放大后可缩放");preview.setOnClickListener(v->showPixels());previewCard.addView(preview,new LinearLayout.LayoutParams(-1,dp(360)));
         imageInfo=text("正在生成预览…",12,0xff52635d);imageInfo.setMaxLines(2);imageInfo.setOnClickListener(v->showImageSettings());previewCard.addView(imageInfo);
-        leaveCalibration=action("退出校色测试 · 恢复编辑",v->leaveCalibrationChart());leaveCalibration.setVisibility(View.GONE);previewCard.addView(leaveCalibration);
+        leaveCalibration=action("退出测试图 · 恢复编辑",v->leaveCalibrationChart());leaveCalibration.setVisibility(View.GONE);previewCard.addView(leaveCalibration);
         refresh=action("发送到墨水屏",v->confirmRefresh());primary(refresh);send.addView(refresh);
         readiness=text("",12,0xff52635d);send.addView(readiness);
         readinessAction=action("完成设备设置",v->resolveReadiness());send.addView(readinessAction);
@@ -239,7 +240,7 @@ public final class MainActivity extends Activity {
         LinearLayout editorPreviewCard=surface();editor.addView(editorPreviewCard);
         editPreview=new PixelPreview(this);editPreview.setContentDescription("编辑后的实际发送像素预览，点击可放大");editPreview.setOnClickListener(v->showPixels());editorPreviewCard.addView(editPreview,new LinearLayout.LayoutParams(-1,dp(230)));
         editInfo=text("正在读取编辑草稿…",12,0xff52635d);editInfo.setMaxLines(2);editInfo.setOnClickListener(v->showImageSettings());editorPreviewCard.addView(editInfo);
-        leaveCalibrationEdit=action("退出校色测试 · 恢复编辑",v->leaveCalibrationChart());leaveCalibrationEdit.setVisibility(View.GONE);editorPreviewCard.addView(leaveCalibrationEdit);
+        leaveCalibrationEdit=action("退出测试图 · 恢复编辑",v->leaveCalibrationChart());leaveCalibrationEdit.setVisibility(View.GONE);editorPreviewCard.addView(leaveCalibrationEdit);
         LinearLayout tools=new LinearLayout(this);editor.addView(tools);
         for(int i=0;i<3;i++){final int index=i;editorTabs[i]=button(new String[]{"构图","色彩","更多"}[i]);editorTabs[i].setOnClickListener(v->selectEditor(index));tools.addView(editorTabs[i],weighted());}
         pageScrolls[3]=new ScrollView(this);editor.addView(pageScrolls[3],new LinearLayout.LayoutParams(-1,0,1));
@@ -257,7 +258,13 @@ public final class MainActivity extends Activity {
         LinearLayout cropActions=new LinearLayout(this);rotateImage=action("旋转 90°",v->{rotation=(rotation+90)%360;prepare();});cropImage=action("裁切",v->showCrop());restoreImage=action("还原原图",v->{if(originalSource!=null){source=originalSource;rotation=0;cropped=false;appliedCrop=null;prepare();}});
         cropActions.addView(rotateImage,weighted());cropActions.addView(cropImage,weighted());cropActions.addView(restoreImage,weighted());page.addView(cropActions);
         page.addView(text("预览来自实际发送像素；点击图片放大，点击图片名称查看参数。",12,0xff68766e));
-        page=editorBodies[1];adjustments=new ImageAdjustmentUi(this,()->prepare());adjustments.addTo(page);
+        page=editorBodies[1];
+        page.addView(text("照片出图方法",14,0xff52635d));
+        rasterStyle=spinner(new String[]{"原项目算法 · 校色 / 二值化 / 抖动 / 简化","鎏金 · 原图 + Atkinson","质感 · LOMO + Atkinson","色阶 · 纯量化不抖动","水墨 · 灰阶 + Atkinson"});
+        rasterStyle.setSelection(Math.max(0,Math.min(4,getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("rasterStyle",0))));page.addView(rasterStyle);
+        rasterStyleHint=text("原项目图像转换链路；可继续使用下方的校色、阈值、抖动和色块设置。",12,0xff68766e);page.addView(rasterStyleHint);
+        rasterStyle.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> p,View v,int pos,long id){if(initializing)return;getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putInt("rasterStyle",pos).apply();if(adjustments!=null)adjustments.setProfile(pos);updateRasterStyleHint();prepare();controls();}public void onNothingSelected(AdapterView<?> p){}});
+        adjustments=new ImageAdjustmentUi(this,selectedRasterStyle(),()->prepare(),this::showOriginalComparison,this::restoreOriginalComparison);adjustments.addTo(page);
         page=editorBodies[2];binary=new CheckBox(this);binary.setText("黑白二值化");binary.setChecked(getSharedPreferences("refresh-settings",MODE_PRIVATE).getBoolean("binary",false));idleControls.add(binary);page.addView(binary);
         int savedThreshold=getSharedPreferences("refresh-settings",MODE_PRIVATE).getInt("threshold",128);thresholdLabel=text("二值化阈值："+Math.max(0,Math.min(255,savedThreshold)),13,0xff52635d);page.addView(thresholdLabel);
         threshold=new SeekBar(this);threshold.setMax(255);threshold.setProgress(Math.max(0,Math.min(255,savedThreshold)));idleControls.add(threshold);page.addView(threshold);
@@ -312,6 +319,7 @@ public final class MainActivity extends Activity {
             public void calibrationModal(boolean open){editingCrop=open;if(!destroyed)controls();}
             public void calibrationLoading(boolean loading){preparing=loading;if(!destroyed)controls();}
             public void showCalibrationChart(){enterCalibrationChart();}
+            public void showMixingChart(){enterMixingChart();}
         });calibration.addTo(calibrationBody);
         page.addView(action("重新查看使用引导",v->{getSharedPreferences("refresh-settings",MODE_PRIVATE).edit().putBoolean("setupComplete",false).apply();selectPage(0);controls();}));
         Button about=button("参考项目与许可证");about.setOnClickListener(v->showLicense());page.addView(about);page.addView(text("墨水屏刷新测试 · "+appVersion(),12,0xff68766e));
@@ -332,7 +340,7 @@ public final class MainActivity extends Activity {
         Runnable label=()->{boolean expanded=body.getVisibility()==View.VISIBLE;toggle.setText(name+(expanded?"  ▴":"  ▾"));toggle.setContentDescription(name+(expanded?"，已展开，点击收起":"，已收起，点击展开"));};
         toggle.setOnClickListener(v->{body.setVisibility(body.getVisibility()==View.VISIBLE?View.GONE:View.VISIBLE);label.run();});label.run();parent.addView(toggle);parent.addView(body);return body;
     }
-    private void selectEditor(int index){for(int i=0;i<3;i++){boolean selected=i==index;editorBodies[i].setVisibility(selected?View.VISIBLE:View.GONE);styleTab(editorTabs[i],selected);}pageScrolls[3].scrollTo(0,0);}
+    private void selectEditor(int index){if(adjustments!=null)adjustments.cancelComparison();for(int i=0;i<3;i++){boolean selected=i==index;editorBodies[i].setVisibility(selected?View.VISIBLE:View.GONE);styleTab(editorTabs[i],selected);}pageScrolls[3].scrollTo(0,0);}
     private void styleTab(Button button,boolean selected){button.setSelected(selected);button.setTextColor(selected?Color.WHITE:0xff52635d);button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(selected?0xff176b61:0xffe3eae6));}
     private boolean nfcEnabled(){try{android.nfc.NfcAdapter adapter=android.nfc.NfcAdapter.getDefaultAdapter(this);return adapter!=null&&adapter.isEnabled();}catch(Exception e){return false;}}
     private boolean connectionReady(){
@@ -406,6 +414,18 @@ public final class MainActivity extends Activity {
         controls();if(sendGate()!=WorkflowStatus.Gate.READY||!backendProblem().isEmpty()){resolveReadiness();return false;}return true;
     }
     private void setImageStatus(String message){imageInfo.setText(message);editInfo.setText(message);}
+    private void showOriginalComparison(){
+        if(prepared==null||prepared.originalPreview==null||preparing||busy)return;
+        // Keep the prepared preview bitmap and NFC payload untouched; draw the original as a
+        // temporary overlay in the two preview surfaces only.
+        preview.setComparisonVisible(true);
+        editPreview.setComparisonVisible(true);
+    }
+    private void restoreOriginalComparison(){
+        // Hiding an overlay is a view-only operation. Never reassign/re-render the preview bitmap.
+        preview.setComparisonVisible(false);
+        editPreview.setComparisonVisible(false);
+    }
     private void showImageSettings(){if(prepared!=null)new AlertDialog.Builder(this).setTitle(imageName).setMessage(prepared.settings+"\n\n552×768 · "+prepared.packed.length+" 字节").setPositiveButton("关闭",null).show();}
     private void showAdvice(){
         new AlertDialog.Builder(this).setTitle(state.getText()).setMessage(lastAdvice.isEmpty()?detail.getText():lastAdvice).setNegativeButton("关闭结果",(d,w)->{if(!busy){terminal=false;resultAction.setVisibility(View.GONE);failureInfo.setVisibility(View.GONE);sessionSteps.setVisibility(View.GONE);controls();}}).setNeutralButton("设备设置",(d,w)->selectPage(0)).setPositiveButton("查看日志",(d,w)->showLogs()).show();
@@ -430,16 +450,28 @@ public final class MainActivity extends Activity {
     }
     private void enterCalibrationChart(){
         if(busy||preparing||editingCrop)return;
-        if(imageMode!=TestImageMode.CALIBRATION)calibrationReturn=editorSnapshot();saveDraft();
+        if(!isEditorTestChart(imageMode))calibrationReturn=editorSnapshot();saveDraft();
         source=Bitmap.createBitmap(552,768,Bitmap.Config.ARGB_8888);int[] pixels=new int[552*768];byte[] codes=CalibrationPalette.chart(552,768);for(int i=0;i<pixels.length;i++)pixels[i]=ImageRaster.color(codes[i]);source.setPixels(pixels,0,552,0,0,552,768);
         originalSource=source;cropped=false;appliedCrop=null;rotation=0;imageMode=TestImageMode.CALIBRATION;imageName="校色基准图";selectPage(1);prepare();
+    }
+    private void enterMixingChart(){
+        if(busy||preparing||editingCrop)return;
+        if(!isEditorTestChart(imageMode))calibrationReturn=editorSnapshot();
+        saveDraft();source=PanelImage.mixingPattern();originalSource=source;cropped=false;appliedCrop=null;rotation=0;
+        imageMode=TestImageMode.MIXING;imageName="混色算法多阶色卡";selectPage(1);prepare();
+    }
+    private void enterStyleChart(){
+        if(busy||preparing||editingCrop)return;
+        if(!isEditorTestChart(imageMode))calibrationReturn=editorSnapshot();
+        saveDraft();source=PanelImage.mixingPattern();originalSource=source;cropped=false;appliedCrop=null;rotation=0;
+        imageMode=TestImageMode.STYLE_CHART;imageName="四种出图方法多阶色卡";selectPage(1);prepare();
     }
     private void leaveCalibrationChart(){if(busy||preparing||editingCrop||calibrationReturn==null)return;EditorSnapshot snapshot=calibrationReturn;calibrationReturn=null;applyEditor(snapshot);prepare();}
     private byte[] png(Bitmap bitmap)throws IOException {ByteArrayOutputStream bytes=new ByteArrayOutputStream();if(!bitmap.compress(Bitmap.CompressFormat.PNG,100,bytes))throw new IOException("无法保存草稿图片");return bytes.toByteArray();}
     private void scheduleDraft(){if(initializing||restoringDraft||destroyed)return;main.removeCallbacks(saveDraftLater);main.postDelayed(saveDraftLater,350);}
     private void saveDraft(){
         if(initializing||restoringDraft||source==null||draftWorker.isShutdown())return;
-        final EditorSnapshot snapshot=imageMode==TestImageMode.CALIBRATION?calibrationReturn:editorSnapshot();if(snapshot==null)return;
+        final EditorSnapshot snapshot=isEditorTestChart(imageMode)?calibrationReturn:editorSnapshot();if(snapshot==null)return;
         final int token=++draftRevision;
         try{
             JSONObject json=new JSONObject();json.put("mode",snapshot.mode.name());json.put("name",snapshot.name);json.put("rotation",snapshot.rotation);json.put("cropRotation",snapshot.cropRotation);json.put("fit",snapshot.fit);json.put("cropped",snapshot.cropped);
@@ -463,7 +495,7 @@ public final class MainActivity extends Activity {
         draftWorker.execute(()->{EditorSnapshot snapshot=null;String warning="";
             try{ImageDraftStore.Draft draft=draftStore.load();if(draft!=null){
                 JSONObject json=new JSONObject(draft.settings);snapshot=new EditorSnapshot();snapshot.original=decodeDraft(draft.original);snapshot.current=draft.current==draft.original?snapshot.original:decodeDraft(draft.current);snapshot.mode=TestImageMode.valueOf(json.getString("mode"));snapshot.name=json.getString("name");snapshot.rotation=json.getInt("rotation");snapshot.cropRotation=json.getInt("cropRotation");snapshot.fit=json.getInt("fit");snapshot.cropped=json.getBoolean("cropped");
-                if(snapshot.mode==TestImageMode.CALIBRATION||snapshot.rotation<0||snapshot.rotation>270||snapshot.rotation%90!=0||snapshot.cropRotation<0||snapshot.cropRotation>270||snapshot.cropRotation%90!=0||snapshot.fit<0||snapshot.fit>1)throw new IOException("草稿参数无效");
+                if(isEditorTestChart(snapshot.mode)||snapshot.rotation<0||snapshot.rotation>270||snapshot.rotation%90!=0||snapshot.cropRotation<0||snapshot.cropRotation>270||snapshot.cropRotation%90!=0||snapshot.fit<0||snapshot.fit>1)throw new IOException("草稿参数无效");
                 if(snapshot.cropped){boolean swap=snapshot.cropRotation%180!=0;int w=swap?snapshot.original.getHeight():snapshot.original.getWidth(),h=swap?snapshot.original.getWidth():snapshot.original.getHeight();snapshot.crop=CropWindow.restore(w,h,json.getDouble("left"),json.getDouble("top"),json.getDouble("width"));}
             }}catch(Exception|OutOfMemoryError e){snapshot=null;warning="无法恢复上次编辑，已打开测试图："+e.getMessage();}
             final EditorSnapshot restored=snapshot;final String notice=warning;
@@ -479,11 +511,13 @@ public final class MainActivity extends Activity {
     }
     private void showTestPatterns(){
         if(busy||preparing||editingCrop)return;
-        final String[] names={"四色测试图","色阶与抖动测试图","纯黑测试图","纯白测试图","纯黄测试图","纯红测试图"};
-        final TestImageMode[] modes={TestImageMode.FOUR_COLOR,TestImageMode.TONES,TestImageMode.BLACK,TestImageMode.WHITE,TestImageMode.YELLOW,TestImageMode.RED};
-        new AlertDialog.Builder(this).setTitle("选择测试图 · 不使用校色数据").setItems(names,(dialog,index)->{
+        final String[] names={"四色测试图 · 原色编码","色阶与抖动测试图","四种出图方法 · 多阶色卡","混色算法 · 多阶校色色卡","纯黑测试图","纯白测试图","纯黄测试图","纯红测试图"};
+        final TestImageMode[] modes={TestImageMode.FOUR_COLOR,TestImageMode.TONES,TestImageMode.STYLE_CHART,TestImageMode.MIXING,TestImageMode.BLACK,TestImageMode.WHITE,TestImageMode.YELLOW,TestImageMode.RED};
+        new AlertDialog.Builder(this).setTitle("选择测试图").setItems(names,(dialog,index)->{
             if(busy||preparing||editingCrop)return;
-            calibrationReturn=null;imageMode=modes[index];source=index==0?PanelImage.testPattern():index==1?PanelImage.tonePattern():PanelImage.solidPattern(index-2);originalSource=source;cropped=false;rotation=0;imageName=names[index];prepare();
+            if(index==2){enterStyleChart();return;}
+            if(index==3){enterMixingChart();return;}
+            calibrationReturn=null;imageMode=modes[index];source=index==0?PanelImage.testPattern():index==1?PanelImage.tonePattern():PanelImage.solidPattern(index-4);originalSource=source;cropped=false;appliedCrop=null;rotation=0;imageName=names[index];prepare();
         }).setNegativeButton("取消",null).show();
     }
     private Bitmap recentThumbnail(RecentImageStore.Entry entry)throws IOException {
@@ -541,7 +575,7 @@ public final class MainActivity extends Activity {
         calibrationReturn=null;imageMode=TestImageMode.NONE;source=image;originalSource=image;cropped=false;appliedCrop=null;rotation=0;imageName=name;preparing=false;prepare();
     }
     private void section(LinearLayout page,String title){TextView t=text(title,18,0xff142f2a);t.setTypeface(null,Typeface.BOLD);t.setPadding(0,dp(12),0,dp(6));page.addView(t);}
-    private void selectPage(int index){activePage=Math.max(0,Math.min(3,index));for(int i=0;i<4;i++){pageFrames[i].setVisibility(i==activePage?View.VISIBLE:View.GONE);styleTab(tabs[i],i==activePage);}}
+    private void selectPage(int index){if(adjustments!=null)adjustments.cancelComparison();activePage=Math.max(0,Math.min(3,index));for(int i=0;i<4;i++){pageFrames[i].setVisibility(i==activePage?View.VISIBLE:View.GONE);styleTab(tabs[i],i==activePage);}}
     private void showLogs(){if(log.getParent()!=null)((android.view.ViewGroup)log.getParent()).removeView(log);ScrollView scroll=new ScrollView(this);scroll.addView(log);new AlertDialog.Builder(this).setTitle("运行日志").setView(scroll).setNeutralButton("复制",(d,w)->{((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("墨水屏日志",transcript.toString()));Toast.makeText(this,"日志已复制",Toast.LENGTH_SHORT).show();}).setPositiveButton("关闭",null).show();}
     private LinearLayout.LayoutParams weighted(){return AppUi.params(this,0,-2,1);}
     private TextView text(String s,int size,int color){TextView t=new TextView(this);t.setText(s);t.setTextSize(size);t.setTextColor(color);t.setPadding(0,dp(4),0,dp(4));return t;}
@@ -560,25 +594,48 @@ public final class MainActivity extends Activity {
     }
     private void unbindHalBridge(){try{Shizuku.unbindUserService(halBridgeArgs,bridgeConnection,false);}catch(Exception ignored){}}
     private String selectedPanelType(){int pos=panelType.getSelectedItemPosition();return pos==1?"A0":pos==2?"A1":pos==3?"A0X":"";}
+    private int selectedRasterStyle(){return rasterStyle==null?0:rasterStyle.getSelectedItemPosition();}
+    private void updateRasterStyleHint(){
+        if(rasterStyleHint==null)return;
+        int style=selectedRasterStyle();
+        if(imageMode==TestImageMode.MIXING){
+            rasterStyleHint.setText("当前为混色算法多阶色卡：此处出图方法下拉用于选择对应的独立亮度 / 色温 / 对比度配置，不改变混色算法；混色算法仍由“设置 → 屏幕校色 → 混色算法预设”控制。");
+        }else if(style==0)rasterStyleHint.setText("原项目图像转换链路；使用“原项目算法”独立保存的亮度、色温、对比度配置，并继续使用下方校色、阈值、抖动和色块设置。");
+        else rasterStyleHint.setText(ReinkRaster.HINTS[style-1]+"。此方法自带量化 / 抖动规则；下方二值化、色块简化和手动抖动开关不参与。亮度 / 色温 / 对比度使用“"+ReinkRaster.MODES[style-1]+"”自己的独立配置。");
+    }
+    private static boolean isEditorTestChart(TestImageMode mode){return mode==TestImageMode.CALIBRATION||mode==TestImageMode.MIXING||mode==TestImageMode.STYLE_CHART;}
     private void controls(){
         if(initializing)return;
         updateBackendChoices();
         boolean enabled=!busy&&!preparing&&!editingCrop&&!restoringDraft;for(View view:idleControls)view.setEnabled(enabled);
         boolean powering=busy&&activeMode.equals("power");powerSupply.setEnabled(!stopping&&(enabled||powering));powerSupply.setText(stopping&&powering?"正在关闭供能…":powering?"关闭 NFC 供能":"开启 NFC 供能");
-        boolean edit=enabled&&!imageMode.fixedRaster();for(View view:new View[]{rotateImage,cropImage,restoreImage,fit,binary,blocks})view.setEnabled(edit);
-        boolean mono=binary.isChecked();thresholdLabel.setVisibility(mono?View.VISIBLE:View.GONE);threshold.setVisibility(mono?View.VISIBLE:View.GONE);thresholdHint.setVisibility(mono?View.VISIBLE:View.GONE);threshold.setEnabled(edit&&mono);
-        boolean simplified=blocks.getSelectedItemPosition()>0;dither.setEnabled(edit&&!simplified);ditherHint.setText(imageMode.fixedRaster()?"当前为固定编码测试图，图像调整已锁定。":simplified?"已启用色块简化，抖动自动关闭。档位越强细节越少；供能或稳定性变化需实测。":"抖动使用色点模拟色阶。供能和刷新稳定性请以实测为准。");
-        adjustments.setEditable(edit);stop.setEnabled(busy&&!stopping);stop.setVisibility(busy?View.VISIBLE:View.GONE);calibration.setEditable(enabled);deviceStop.setEnabled(busy&&!stopping);deviceStop.setVisibility(busy?View.VISIBLE:View.GONE);editorLocked.setVisibility(busy?View.VISIBLE:View.GONE);
-        leaveCalibration.setVisibility(imageMode==TestImageMode.CALIBRATION&&calibrationReturn!=null?View.VISIBLE:View.GONE);leaveCalibrationEdit.setVisibility(leaveCalibration.getVisibility());updateReadiness();syncDeviceFeedback();
+        boolean edit=enabled&&!imageMode.locksEditor();
+        boolean styleEditable=enabled&&!imageMode.fixedRaster();
+        if(rasterStyle!=null)rasterStyle.setEnabled(styleEditable);
+        updateRasterStyleHint();
+        boolean recipe=selectedRasterStyle()>0;
+        for(View view:new View[]{rotateImage,cropImage,restoreImage,fit})view.setEnabled(edit);
+        binary.setEnabled(edit&&!recipe);blocks.setEnabled(edit&&!recipe);
+        boolean mono=binary.isChecked()&&!recipe;thresholdLabel.setVisibility(mono?View.VISIBLE:View.GONE);threshold.setVisibility(mono?View.VISIBLE:View.GONE);thresholdHint.setVisibility(mono?View.VISIBLE:View.GONE);threshold.setEnabled(edit&&mono);
+        boolean simplified=blocks.getSelectedItemPosition()>0;dither.setEnabled(edit&&!recipe&&!simplified);
+        ditherHint.setText(imageMode==TestImageMode.MIXING?"当前为混色算法多阶色卡；可调整亮度、色温、对比度，所选出图方法只决定载入哪一套独立参数，混色预设保持不变。参数中可查看四色输出占比与色板 RGB。":imageMode==TestImageMode.STYLE_CHART?"当前为四种出图方法对照色卡；可在“色彩”页切换鎏金、质感、色阶、水墨，并分别调整及保存亮度、色温、对比度。“水墨”会主动转为灰阶。":imageMode.fixedRaster()?"当前为固定编码测试图，图像调整已锁定。":recipe?"当前选择“"+ReinkRaster.MODES[selectedRasterStyle()-1]+"”，使用其独立保存的亮度 / 色温 / 对比度以及自带量化 / 抖动规则；二值化、色块简化和手动抖动设置已暂停。":"原项目抖动使用色点模拟色阶。亮度、色温和对比度保存在原项目算法自己的配置中。供能和刷新稳定性请以实测为准。");
+        adjustments.setEditable(enabled&&!imageMode.fixedRaster());stop.setEnabled(busy&&!stopping);stop.setVisibility(busy?View.VISIBLE:View.GONE);calibration.setEditable(enabled);deviceStop.setEnabled(busy&&!stopping);deviceStop.setVisibility(busy?View.VISIBLE:View.GONE);editorLocked.setVisibility(busy?View.VISIBLE:View.GONE);
+        leaveCalibration.setVisibility(isEditorTestChart(imageMode)&&calibrationReturn!=null?View.VISIBLE:View.GONE);leaveCalibrationEdit.setVisibility(leaveCalibration.getVisibility());
+        adjustments.setCanCompare(enabled&&prepared!=null&&prepared.originalPreview!=null);
+        updateReadiness();syncDeviceFeedback();
     }
     private void prepare(){
         if(initializing||restoringDraft||source==null||busy||destroyed||editingCrop)return;
         final int token=++revision,angle=rotation,block=blockSizes[blocks.getSelectedItemPosition()],level=threshold.getProgress();final boolean cover=fit.getSelectedItemPosition()==1,noise=dither.isChecked(),mono=binary.isChecked(),hasCrop=cropped;final Bitmap input=source;final String chosenPanel=selectedPanelType();
-        final int[] palette=calibration==null?null:calibration.activePalette();final TestImageMode mode=imageMode;
+        final TestImageMode mode=imageMode;
+        final int[] palette=calibration==null?null:(mode==TestImageMode.MIXING||mode==TestImageMode.STYLE_CHART?calibration.testPalette():calibration.activePalette());
+        final ColorMixPreset mixPreset=calibration==null?ColorMixPreset.LEGACY_FS:calibration.activePreset();
+        final int reinkMode=selectedRasterStyle()-1;
         final ImageAdjustments tones=adjustments==null?ImageAdjustments.NONE:adjustments.snapshot();
-        prepared=null;preparing=true;controls();setImageStatus("正在生成四色预览…");
-        new Thread(()->{try{PanelImage.Prepared image=PanelImage.prepare(input,angle,cover,noise,block,mono,level,hasCrop,chosenPanel,palette,mode,tones);
-            main.post(()->{if(token!=revision||destroyed)return;prepared=image;preview.setImage(image.preview);editPreview.setImage(image.preview);setImageStatus(imageName+" · "+(imageMode==TestImageMode.NONE?"点击查看参数":"测试图不使用校色 · 点击查看参数"));preparing=false;controls();scheduleDraft();});
+        if(adjustments!=null)adjustments.cancelComparison();
+        prepared=null;preparedStatus="";preparing=true;controls();setImageStatus("正在生成四色预览…");
+        new Thread(()->{try{PanelImage.Prepared image=PanelImage.prepare(input,angle,cover,noise,block,mono,level,hasCrop,chosenPanel,palette,mode,tones,mixPreset,reinkMode);
+            main.post(()->{if(token!=revision||destroyed)return;prepared=image;preview.setImage(image.preview);editPreview.setImage(image.preview);preview.setComparisonImage(image.originalPreview);editPreview.setComparisonImage(image.originalPreview);preview.setComparisonVisible(false);editPreview.setComparisonVisible(false);preparedStatus=imageName+" · "+(imageMode==TestImageMode.NONE?"点击查看参数":imageMode==TestImageMode.MIXING?"使用当前校色色板和混色预设 · 点击查看参数":imageMode==TestImageMode.STYLE_CHART?"可在色彩页切换四种出图方法 · 点击查看参数":"固定编码测试图 · 点击查看参数");setImageStatus(preparedStatus);preparing=false;controls();scheduleDraft();});
         }catch(Throwable e){main.post(()->{if(token!=revision||destroyed)return;preparing=false;controls();setImageStatus("预览失败："+e.getMessage());});}},"image-preview").start();
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
@@ -595,7 +652,7 @@ public final class MainActivity extends Activity {
         if(prepared==null||busy||preparing||editingCrop)return;
         final Bitmap snapshot=prepared.preview;android.app.Dialog dialog=new android.app.Dialog(this,android.R.style.Theme_Material_Light_NoActionBar);previewDialog=dialog;dialog.setOnDismissListener(d->previewDialog=null);
         LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setBackgroundColor(0xfff4f7f5);content.setPadding(dp(12),dp(12),dp(12),dp(12));
-        content.addView(text("最终发送像素 · 552 × 768",20,0xff142f2a));content.addView(text("双指缩放 · 单指拖动 · 双击切换缩放；"+(imageMode==TestImageMode.NONE?"校色开启时以近似实物色显示":"测试图不使用校色数据"),12,0xff52635d));
+        content.addView(text("最终发送像素 · 552 × 768",20,0xff142f2a));content.addView(text("双指缩放 · 单指拖动 · 双击切换缩放；"+(imageMode==TestImageMode.MIXING?"混色色卡使用当前测量色板和混色算法预设":imageMode==TestImageMode.STYLE_CHART?"切换色彩页的四种出图方法重复刷写比较":imageMode==TestImageMode.NONE?"校色开启时以近似实物色显示":"固定测试图不使用校色数据"),12,0xff52635d));
         ZoomPreview viewer=new ZoomPreview(this,snapshot);content.addView(viewer,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout actions=new LinearLayout(this);Button fitButton=button("适应屏幕"),actual=button("1:1 像素"),close=button("关闭");fitButton.setOnClickListener(v->viewer.fit());actual.setOnClickListener(v->viewer.actual());close.setOnClickListener(v->dialog.dismiss());actions.addView(fitButton,weighted());actions.addView(actual,weighted());actions.addView(close,weighted());content.addView(actions);
         dialog.setContentView(content);dialog.show();dialog.getWindow().setLayout(-1,-1);
@@ -796,8 +853,8 @@ public final class MainActivity extends Activity {
         TextView t=text(body.toString(),12,0xff263e35);t.setTextIsSelectable(true);t.setPadding(dp(16),dp(10),dp(16),dp(10));ScrollView s=new ScrollView(this);s.addView(t);new AlertDialog.Builder(this).setTitle("PolyForm Noncommercial 1.0.0").setView(s).setPositiveButton("关闭",null).show();
     }
     @Override protected void onResume(){super.onResume();resumed=true;connectShizuku(false);}
-    @Override protected void onPause(){ForegroundNfcSession session=foregroundSession;if(session!=null){resumed=false;if(session.readerActive())session.cancel();}super.onPause();}
+    @Override protected void onPause(){if(adjustments!=null)adjustments.cancelComparison();ForegroundNfcSession session=foregroundSession;if(session!=null){resumed=false;if(session.readerActive())session.cancel();}super.onPause();}
     @Override protected void onSaveInstanceState(Bundle out){super.onSaveInstanceState(out);main.removeCallbacks(saveDraftLater);saveDraft();if(calibration!=null)calibration.saveState(out);}
-    @Override protected void onStop(){resumed=false;main.removeCallbacks(saveDraftLater);saveDraft();if(busy)requestStop("页面已离开，自动停止");super.onStop();}
+    @Override protected void onStop(){if(adjustments!=null)adjustments.cancelComparison();resumed=false;main.removeCallbacks(saveDraftLater);saveDraft();if(busy)requestStop("页面已离开，自动停止");super.onStop();}
     @Override protected void onDestroy(){main.removeCallbacks(saveDraftLater);saveDraft();draftWorker.shutdown();destroyed=true;revision++;if(launchMode instanceof BackendChoiceSpinner)((BackendChoiceSpinner)launchMode).dismissChoices();if(discoveryBackend instanceof BackendChoiceSpinner)((BackendChoiceSpinner)discoveryBackend).dismissChoices();if(halManager instanceof BackendChoiceSpinner)((BackendChoiceSpinner)halManager).dismissChoices();if(recentDialog!=null)recentDialog.dismiss();if(previewDialog!=null)previewDialog.dismiss();if(calibration!=null)calibration.destroy();if(adjustments!=null)adjustments.destroy();if(busy)requestStop("页面关闭，自动停止");Shizuku.removeRequestPermissionResultListener(permissionResult);Shizuku.removeBinderReceivedListener(binderReceived);Shizuku.removeBinderDeadListener(binderDead);try{Shizuku.unbindUserService(bridgeArgs,bridgeConnection,false);}catch(Exception ignored){}if(foregroundSession==null)unbindHalBridge();main.removeCallbacks(tick);main.removeCallbacks(bridgeTimeout);try{unregisterReceiver(nfcStateReceiver);}catch(Exception ignored){}super.onDestroy();}
 }

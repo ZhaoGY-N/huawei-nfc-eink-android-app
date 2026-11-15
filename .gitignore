@@ -9,3 +9,4 @@ __pycache__/
 *.log
 /local.properties
 /assets/native/
+/tools/python*/
